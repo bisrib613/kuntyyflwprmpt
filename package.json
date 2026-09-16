@@ -1,6 +1,6 @@
 {
   "name": "kuntyyflwprmpt",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Desktop queue runner for Google Flow using local FlowPilot sessions.",
   "author": "bisrib613",
@@ -42,7 +42,10 @@
     "asar": true,
     "afterPack": "scripts/after-pack.cjs",
     "compression": "maximum",
-    "electronLanguages": ["en-US", "id"],
+    "electronLanguages": [
+      "en-US",
+      "id"
+    ],
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
