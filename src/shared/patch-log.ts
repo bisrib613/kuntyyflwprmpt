@@ -8,6 +8,7 @@ export const NEXT_UPDATE_PATCHES = [
   "Application name changed to Kuntyy AutoPrompt.",
   "Update channel and release metadata now use a low-profile repository identity.",
   "Detailed patch notes moved from GitHub releases into the application.",
+  "Reduced the Windows installer by removing unused runtime languages and duplicate renderer dependencies.",
 ]
 
 export const PATCH_LOG: PatchLogEntry[] = [

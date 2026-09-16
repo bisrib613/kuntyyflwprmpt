@@ -11,37 +11,44 @@
     "build": "tsc -p tsconfig.electron.json && vite build",
     "test": "vitest run --root .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "verify:release": "node scripts/verify-release.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9",
-    "playwright-core": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "electron-updater": "6.8.9",
+    "playwright-core": "1.63.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
-    "concurrently": "latest",
-    "cross-env": "latest",
-    "electron": "latest",
-    "electron-builder": "latest",
-    "typescript": "latest",
-    "vite": "latest",
-    "vitest": "latest",
-    "wait-on": "latest"
+    "@types/node": "24.13.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "cross-env": "10.1.0",
+    "electron": "44.4.1",
+    "electron-builder": "26.15.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1",
+    "wait-on": "9.1.0"
   },
   "build": {
     "appId": "com.kuntyy.autoprompt",
     "productName": "Kuntyy AutoPrompt",
     "artifactName": "Kuntyy-AutoPrompt-${version}-${arch}.${ext}",
+    "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
+    "compression": "maximum",
+    "electronLanguages": ["en-US", "id"],
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/playwright-core/lib/vite/**/*",
+      "!node_modules/playwright-core/lib/tools/**/*"
     ],
     "directories": {
       "output": "release"

@@ -56,6 +56,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist -- --publish never
 
+      - name: Enforce release size and package contents
+        run: npm run verify:release
+
       - name: Push version commit and tag
         shell: bash
         run: git push origin HEAD:main --follow-tags
