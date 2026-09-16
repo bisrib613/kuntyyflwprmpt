@@ -1,0 +1,74 @@
+name: Release Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increase
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kuntyyflwprmpt-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify source
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Bump application version
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version "${{ inputs.bump }}" -m "release v%s"
+
+      - name: Build NSIS installer and update metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist -- --publish never
+
+      - name: Push version commit and tag
+        shell: bash
+        run: git push origin HEAD:main --follow-tags
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release create "v${VERSION}" \
+            release/*.exe \
+            release/*.blockmap \
+            release/latest.yml \
+            --title "v${VERSION}" \
+            --notes "Update details are available inside the application."
