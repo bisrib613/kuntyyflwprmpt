@@ -1,6 +1,6 @@
 {
   "name": "kuntyyflwprmpt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Desktop queue runner for Google Flow using local FlowPilot sessions.",
   "author": "bisrib613",
@@ -59,7 +59,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
