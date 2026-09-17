@@ -4,6 +4,7 @@ import { chromium, type BrowserContext, type Locator, type Page } from "playwrig
 import type { AssetInput, BrowserCookie, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
 import { flowSelectors } from "./selectors.js"
+import { logAutomation } from "../../sidecar/logger.js"
 
 type OutputCard = { locator: Locator; index: number }
 type ActiveProject = { id: string; name: string }
@@ -16,13 +17,17 @@ export class FlowController {
   private constructor(private readonly context: BrowserContext, private readonly page: Page) {}
 
   static async launch(profileDirectory: string, cookies: BrowserCookie[]): Promise<FlowController> {
+    logAutomation("chrome.launch.start", { channel: "chrome", headless: false, profile: path.basename(profileDirectory), cookieCount: cookies.length })
     const context = await chromium.launchPersistentContext(profileDirectory, {
       channel: "chrome",
       headless: false,
+      timeout: 30_000,
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },
     })
+    logAutomation("chrome.launch.complete")
     await context.addCookies(cookies)
+    logAutomation("chrome.cookies.added", { count: cookies.length })
     const page = context.pages()[0] || await context.newPage()
     return new FlowController(context, page)
   }
@@ -30,7 +35,9 @@ export class FlowController {
   async close(): Promise<void> { await this.context.close() }
 
   private async openFlowHome(): Promise<void> {
+    logAutomation("flow.navigation.start", { destination: "home" })
     await this.page.goto("https://flow.google.com/", { waitUntil: "domcontentloaded" })
+    logAutomation("flow.navigation.complete", { destination: "home", pathname: new URL(this.page.url()).pathname })
     if (this.page.url().includes("accounts.google.com")) throw new Error("The selected FlowPilot session is signed out. Open this account in FlowPilot and sign in first.")
   }
 
@@ -42,6 +49,7 @@ export class FlowController {
   async openProject(settings: RunSettings): Promise<ActiveProject> {
     await this.openFlowHome()
     if (settings.projectMode === "new") {
+      logAutomation("project.create.start")
       const create = this.page.getByRole("button", { name: /New project/i })
       await create.waitFor({ state: "visible", timeout: 20_000 })
       await create.click()
@@ -54,10 +62,12 @@ export class FlowController {
         if (await title.isVisible()) { await title.fill(name); await title.press("Enter") }
       }
       this.useProject(id)
+      logAutomation("project.create.complete", { projectId: id })
       return { id, name: name || "New project" }
     }
 
     const recent = this.page.locator(flowSelectors.recentProject).filter({ visible: true }).first()
+    logAutomation("project.recent.wait")
     await recent.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {
       throw new Error("No recent Google Flow project is available. Choose Create project for the first run.")
     })
@@ -68,10 +78,12 @@ export class FlowController {
     await recent.click()
     await this.page.waitForURL(new RegExp(`/project/${id}(?:[/?#]|$)`), { timeout: 20_000 })
     this.useProject(id)
+    logAutomation("project.recent.opened", { projectId: id })
     return { id, name: name || "Recent project" }
   }
 
   async configure(settings: RunSettings): Promise<void> {
+    logAutomation("flow.configure.start", { output: settings.output, model: settings.model, aspectRatio: settings.aspectRatio, variants: settings.variants })
     await this.page.locator(flowSelectors.settings).click()
     await this.page.getByRole("radio", { name: settings.output === "image" ? /Image/i : /Video/i }).click()
     await this.page.getByRole("radio", { name: new RegExp(settings.aspectRatio.replace(":", "\\s*:\\s*")) }).click()
@@ -83,6 +95,7 @@ export class FlowController {
     }
     await this.page.getByRole("radio", { name: `x${settings.variants}`, exact: true }).click()
     await this.page.locator(flowSelectors.settings).press("Escape")
+    logAutomation("flow.configure.complete")
   }
 
   async submitJob(job: PromptJob, sharedAssets: AssetInput[]): Promise<Set<string>> {

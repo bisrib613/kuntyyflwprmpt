@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises"
 import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
 import { parsePromptText } from "../../shared/prompt-file.js"
 import { FlowController } from "./flow-controller.js"
+import { logAutomation } from "../../sidecar/logger.js"
 
 export class QueueRunner {
   private controller: FlowController | null = null
@@ -18,7 +19,11 @@ export class QueueRunner {
   ) {}
 
   async connect(): Promise<FlowController> {
-    if (!this.controller) this.controller = await FlowController.launch(this.profileDirectory, this.cookies)
+    if (!this.controller) {
+      logAutomation("runner.connect.start", { accountId: this.account.id })
+      this.controller = await FlowController.launch(this.profileDirectory, this.cookies)
+      logAutomation("runner.connect.complete", { accountId: this.account.id })
+    }
     return this.controller
   }
 
@@ -31,6 +36,7 @@ export class QueueRunner {
     this.running = true
     this.cancelled = false
     this.runId = randomUUID()
+    logAutomation("runner.run.start", { runId: this.runId, accountId: this.account.id, projectMode: settings.projectMode, jobCount: settings.jobs.length })
     try {
       const controller = await this.connect()
       this.emit({ runId: this.runId, status: "ready", message: `Connected to ${this.account.name}.` })
@@ -77,17 +83,20 @@ export class QueueRunner {
         }
       }
       this.emit({ runId: this.runId, status: "stopped", message: this.cancelled ? "Queue stopped." : "Queue finished." })
+      logAutomation("runner.run.complete", { runId: this.runId, cancelled: this.cancelled })
     } finally {
       this.running = false
     }
   }
 
   async close(): Promise<void> {
+    logAutomation("runner.close.start", { accountId: this.account.id })
     try {
       await this.controller?.close()
     } finally {
       this.controller = null
       await rm(this.profileDirectory, { recursive: true, force: true })
+      logAutomation("runner.close.complete", { accountId: this.account.id })
     }
   }
 }

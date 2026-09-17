@@ -5,6 +5,7 @@ import os from "node:os"
 import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
 import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
+import { logAutomation, logCrash, logDirectory } from "./logger.js"
 
 const tokenIndex = process.argv.indexOf("--token")
 const token = tokenIndex >= 0 ? process.argv[tokenIndex + 1] : ""
@@ -17,6 +18,7 @@ let eventCursor = 0
 const events: Array<{ cursor: number; event: QueueEvent }> = []
 
 const emit = (event: QueueEvent): void => {
+  logAutomation("queue.event", { status: event.status, jobId: event.jobId, progress: event.progress, message: event.message })
   eventCursor += 1
   events.push({ cursor: eventCursor, event })
   if (events.length > 1_000) events.splice(0, events.length - 1_000)
@@ -24,10 +26,12 @@ const emit = (event: QueueEvent): void => {
 
 async function closeRunner(): Promise<void> {
   if (!runner) return
+  logAutomation("session.close.start")
   runner.stop()
   await runner.close()
   runner = null
   connectedAccountId = null
+  logAutomation("session.close.complete")
 }
 
 async function request(method: string, params: unknown): Promise<unknown> {
@@ -35,10 +39,13 @@ async function request(method: string, params: unknown): Promise<unknown> {
   switch (method) {
     case "accounts:list":
       accounts = await listFlowpilotAccounts()
+      logAutomation("accounts.list", { count: accounts.length })
       return accounts
     case "session:status": {
       const accountId = typeof input.accountId === "string" ? input.accountId : ""
-      return Boolean(runner && connectedAccountId === accountId)
+      const ready = Boolean(runner && connectedAccountId === accountId)
+      logAutomation("session.status", { accountId, ready })
+      return ready
     }
     case "session:open": {
       const accountId = typeof input.accountId === "string" ? input.accountId : ""
@@ -53,6 +60,7 @@ async function request(method: string, params: unknown): Promise<unknown> {
       if (!cookies.length || cookies.some((cookie) => !cookie || typeof cookie.name !== "string" || typeof cookie.value !== "string" || typeof cookie.domain !== "string")) {
         throw new Error("FlowPilot did not provide a valid signed-in Google session.")
       }
+      logAutomation("session.open", { accountId, cookieCount: cookies.length, profile: path.basename(profilePath) })
       await closeRunner()
       runner = new QueueRunner(account, profilePath, cookies, emit)
       connectedAccountId = account.id
@@ -64,7 +72,9 @@ async function request(method: string, params: unknown): Promise<unknown> {
       if (runner.isRunning) throw new Error("A queue is already running for this session.")
       if (!settings.jobs.length || settings.jobs.some((job) => !job.prompt.trim())) throw new Error("Every job requires a prompt.")
       const activeRunner = runner
+      logAutomation("queue.start.accepted", { accountId: settings.accountId, projectMode: settings.projectMode, jobCount: settings.jobs.length })
       void activeRunner.run(settings).catch(async (error) => {
+        logAutomation("queue.run.failed", { message: error instanceof Error ? error.message : String(error) })
         emit({ runId: activeRunner.runId, status: "stopped", message: error instanceof Error ? error.message : String(error) })
         if (runner === activeRunner) await closeRunner().catch(() => undefined)
       })
@@ -117,6 +127,7 @@ const server = createServer(async (req, res) => {
     const method = typeof body.method === "string" ? body.method : ""
     send(res, 200, { ok: true, value: await request(method, body.params) })
   } catch (error) {
+    logAutomation("request.failed", { message: error instanceof Error ? error.message : String(error) })
     send(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
   }
 })
@@ -124,6 +135,7 @@ const server = createServer(async (req, res) => {
 server.listen(0, "127.0.0.1", () => {
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("Sidecar did not bind a TCP port.")
+  logAutomation("sidecar.ready", { port: address.port, logDirectory })
   process.stdout.write(`${JSON.stringify({ ready: true, port: address.port })}\n`)
 })
 
@@ -135,3 +147,13 @@ const shutdown = async (): Promise<void> => {
 
 process.on("SIGINT", () => { void shutdown() })
 process.on("SIGTERM", () => { void shutdown() })
+process.on("uncaughtException", (error) => {
+  logCrash("sidecar.uncaughtException", error)
+  process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`)
+  process.exit(1)
+})
+process.on("unhandledRejection", (error) => {
+  logCrash("sidecar.unhandledRejection", error)
+  process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`)
+  process.exit(1)
+})
