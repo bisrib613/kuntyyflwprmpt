@@ -5,6 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Use the user's installed Node.js runtime instead of bundling a duplicate executable.",
+  "Normalized Windows resource paths before starting the automation sidecar.",
+  "Require Windows CI to verify that the installed automation runtime becomes ready.",
   "Prevented an unavailable automation runtime from closing the application during startup.",
   "Added a local startup diagnostic log and an installed-app smoke test to Windows CI.",
   "Application name changed to Kuntyy AutoPrompt.",

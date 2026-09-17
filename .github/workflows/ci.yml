@@ -29,11 +29,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare bundled Node runtime
+      - name: Prepare automation sidecar
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force src-tauri/resources | Out-Null
-          Copy-Item (Get-Command node).Source src-tauri/resources/node.exe -Force
           npm run build:sidecar
           npm run prepare:sidecar
 
@@ -42,8 +40,8 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Verify Rust host
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Verify Rust host and tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build NSIS setup wizard
         run: npm run tauri -- build --config src-tauri/tauri.ci.conf.json
@@ -69,6 +67,13 @@ jobs:
             Get-ChildItem "$env:LOCALAPPDATA/com.kuntyy.autoprompt/logs" -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName }
             throw "Installed application exited during the startup smoke test (exit code $($process.ExitCode))."
+          }
+          $startupLog = "$env:LOCALAPPDATA/com.kuntyy.autoprompt/logs/startup.log"
+          if (-not (Test-Path $startupLog)) { throw "Application startup log was not created." }
+          $startupOutput = Get-Content $startupLog -Raw
+          Write-Host $startupOutput
+          if ($startupOutput -notmatch "Automation runtime is ready\.") {
+            throw "Installed application opened, but its automation runtime did not become ready."
           }
           Stop-Process -Id $process.Id -Force
 

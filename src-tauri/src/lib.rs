@@ -40,28 +40,55 @@ fn append_startup_log(app: &tauri::AppHandle, message: &str) {
     let _ = writeln!(file, "{message}");
 }
 
+fn command_path(path: PathBuf) -> String {
+    let value = path.to_string_lossy().into_owned();
+    if let Some(path) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{path}");
+    }
+    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+fn verify_node_runtime(node: &str) -> Result<(), String> {
+    let output = Command::new(node)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("Node.js was not found in PATH: {error}"))?;
+    if !output.status.success() {
+        return Err("Node.js in PATH could not be started.".to_string());
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let major = version
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| format!("Unable to read the installed Node.js version: {version}"))?;
+    if major < 20 {
+        return Err(format!("Node.js 20 or newer is required; PATH currently resolves to {version}."));
+    }
+    Ok(())
+}
+
 fn sidecar_paths(app: &tauri::AppHandle) -> Result<(String, String), String> {
     if cfg!(debug_assertions) {
         let project = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .ok_or_else(|| "Project root is unavailable.".to_string())?
             .to_path_buf();
-        return Ok(("node".to_string(), project.join("dist-sidecar/sidecar/server.js").to_string_lossy().into_owned()));
+        return Ok(("node".to_string(), command_path(project.join("dist-sidecar/sidecar/server.js"))));
     }
 
     let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
     Ok((
-        resources.join("resources/node.exe").to_string_lossy().into_owned(),
-        resources.join("resources/automation/sidecar/server.js").to_string_lossy().into_owned(),
+        "node.exe".to_string(),
+        command_path(resources.join("resources/automation/sidecar/server.js")),
     ))
 }
 
 fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
     let (node, script) = sidecar_paths(app)?;
     append_startup_log(app, &format!("Starting automation runtime. node={node}; script={script}"));
-    if !std::path::Path::new(&node).is_file() {
-        return Err(format!("Bundled Node runtime is missing: {node}"));
-    }
+    verify_node_runtime(&node)?;
     if !std::path::Path::new(&script).is_file() {
         return Err(format!("Bundled automation script is missing: {script}"));
     }
@@ -122,6 +149,27 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
             .map_err(|error| format!("Unable to initialize the automation bridge: {error}"))?,
         child: Mutex::new(child),
     })
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::command_path;
+
+    #[test]
+    fn strips_windows_verbatim_prefix_from_local_paths() {
+        assert_eq!(
+            command_path(std::path::PathBuf::from(r"\\?\D:\Data\Kuntyy AutoPrompt\server.js")),
+            r"D:\Data\Kuntyy AutoPrompt\server.js"
+        );
+    }
+
+    #[test]
+    fn converts_windows_verbatim_unc_paths() {
+        assert_eq!(
+            command_path(std::path::PathBuf::from(r"\\?\UNC\server\share\server.js")),
+            r"\\server\share\server.js"
+        );
+    }
 }
 
 #[tauri::command]
