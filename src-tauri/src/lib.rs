@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{mpsc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use tauri::WebviewUrl;
@@ -60,6 +60,41 @@ fn startup_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     Ok(directory.join("startup.log"))
+}
+
+fn automation_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.join("automation.log"))
+}
+
+fn log_timestamp() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+}
+
+fn safe_log_value(value: &str) -> String {
+    value.replace(['\r', '\n'], " ").chars().take(1_000).collect()
+}
+
+fn append_automation_log(app: &tauri::AppHandle, event: &str, details: &str) {
+    let Ok(path) = automation_log_path(app) else { return };
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else { return };
+    let suffix = if details.is_empty() { String::new() } else { format!(" {details}") };
+    let _ = writeln!(file, "[{}] {event}{suffix}", log_timestamp());
+}
+
+fn install_panic_log() {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else { return };
+    let directory = PathBuf::from(local_app_data).join("com.kuntyy.autoprompt").join("logs");
+    let _ = fs::create_dir_all(&directory);
+    let crash_log = directory.join("crash.log");
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&crash_log) {
+            let _ = writeln!(file, "[{}] rust.panic {info}", log_timestamp());
+        }
+        previous(info);
+    }));
 }
 
 fn append_startup_log(app: &tauri::AppHandle, message: &str) {
@@ -179,14 +214,15 @@ fn google_cookie_domain(domain: &str) -> bool {
         || domain.ends_with(".googleusercontent.com")
 }
 
-#[tauri::command]
-fn prepare_flowpilot_session(
+fn prepare_flowpilot_session_inner(
     app: tauri::AppHandle,
     account_id: String,
 ) -> Result<PreparedFlowpilotSession, String> {
     if !valid_account_id(&account_id) {
         return Err("Invalid FlowPilot account id.".to_string());
     }
+    let account_log = safe_log_value(&account_id);
+    append_automation_log(&app, "session.prepare.validate", &format!("accountId={account_log}"));
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA is unavailable; FlowPilot profiles cannot be located.".to_string())?;
@@ -208,18 +244,21 @@ fn prepare_flowpilot_session(
     if !source.is_dir() {
         return Err("The selected FlowPilot session profile does not exist.".to_string());
     }
+    append_automation_log(&app, "session.snapshot.copy.start", &format!("accountId={account_log}"));
     let session_root = std::env::temp_dir().join("kuntyy-autoprompt-sessions");
     let snapshot = session_root
         .join(format!("flow-{account_id}-{}", uuid::Uuid::new_v4().simple()));
     copy_session_profile(&source, &snapshot).map_err(|error| {
         format!("FlowPilot session snapshot failed. Close the active Flow profile and retry. {error}")
     })?;
+    append_automation_log(&app, "session.snapshot.copy.complete", &format!("accountId={account_log}"));
 
     let label = format!("flowpilot-session-export-{}", uuid::Uuid::new_v4().simple());
     let app_for_webview = app.clone();
     let snapshot_for_webview = snapshot.clone();
     let label_for_webview = label.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
+    append_automation_log(&app, "session.webview.create.start", &format!("accountId={account_log}"));
     let open_result = app.run_on_main_thread(move || {
         let result = tauri::WebviewWindowBuilder::new(
             &app_for_webview,
@@ -250,6 +289,8 @@ fn prepare_flowpilot_session(
             return Err(error);
         }
     };
+    append_automation_log(&app, "session.webview.create.complete", &format!("accountId={account_log}"));
+    append_automation_log(&app, "session.cookies.read.start", &format!("accountId={account_log}"));
     let result = webview.cookies().map_err(|error| error.to_string()).map(|cookies| {
         cookies
             .into_iter()
@@ -278,6 +319,7 @@ fn prepare_flowpilot_session(
     let _ = webview.close();
     let _ = fs::remove_dir_all(&snapshot);
     let cookies = result?;
+    append_automation_log(&app, "session.cookies.read.complete", &format!("accountId={account_log} count={}", cookies.len()));
     if cookies.is_empty() {
         return Err("No signed-in Google cookies were found in the selected FlowPilot session.".to_string());
     }
@@ -287,10 +329,25 @@ fn prepare_flowpilot_session(
     ));
     fs::create_dir_all(&profile)
         .map_err(|error| format!("Unable to create the temporary automation profile: {error}"))?;
+    append_automation_log(&app, "session.chrome_profile.ready", &format!("accountId={account_log} profile={}", profile.file_name().and_then(|value| value.to_str()).unwrap_or("unknown")));
     Ok(PreparedFlowpilotSession {
         profile_path: command_path(profile),
         cookies,
     })
+}
+
+#[tauri::command]
+fn prepare_flowpilot_session(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<PreparedFlowpilotSession, String> {
+    append_automation_log(&app, "session.prepare.start", "");
+    let result = prepare_flowpilot_session_inner(app.clone(), account_id);
+    match &result {
+        Ok(session) => append_automation_log(&app, "session.prepare.complete", &format!("cookieCount={}", session.cookies.len())),
+        Err(error) => append_automation_log(&app, "session.prepare.failed", &format!("error={}", safe_log_value(error))),
+    }
+    result
 }
 
 fn sidecar_paths(app: &tauri::AppHandle) -> Result<(String, String), String> {
@@ -317,8 +374,11 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
         return Err(format!("Bundled automation script is missing: {script}"));
     }
     let token = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
+    let log_directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&log_directory).map_err(|error| error.to_string())?;
+    let log_directory = command_path(log_directory);
     let mut command = Command::new(&node);
-    command.args([&script, "--token", &token]).stdin(Stdio::null()).stdout(Stdio::piped());
+    command.args([&script, "--token", &token, "--log-dir", &log_directory]).stdin(Stdio::null()).stdout(Stdio::piped());
     if cfg!(debug_assertions) {
         command.stderr(Stdio::inherit());
     } else {
@@ -377,7 +437,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::{command_path, copy_session_profile, google_cookie_domain, valid_account_id};
+    use super::{command_path, copy_session_profile, google_cookie_domain, safe_log_value, valid_account_id};
     use std::fs;
 
     #[test]
@@ -401,6 +461,12 @@ mod path_tests {
         assert!(valid_account_id("flow-account_123"));
         assert!(!valid_account_id("../accounts"));
         assert!(!valid_account_id(""));
+    }
+
+    #[test]
+    fn keeps_runtime_log_entries_on_one_bounded_line() {
+        assert_eq!(safe_log_value("first\r\nsecond"), "first  second");
+        assert_eq!(safe_log_value(&"x".repeat(1_001)).len(), 1_000);
     }
 
     #[test]
@@ -460,6 +526,7 @@ fn read_prompt_file(path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_log();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())

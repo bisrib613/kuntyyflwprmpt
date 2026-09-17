@@ -5,6 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Write persistent automation.log and crash.log files under the application LocalAppData logs folder.",
+  "Record session export, Chrome launch, navigation, project routing, queue phases, and failures without logging cookies or prompt contents.",
+  "Stop waiting after 30 seconds when FlowPilot session preparation does not return.",
   "Start Google Flow sessions automatically when Run queue is pressed; manual Connect is no longer required.",
   "Route runs directly through the first recent project or the native Create project action.",
   "Group multiple prompts with an explicit --- separator while preserving paragraph breaks inside each prompt.",

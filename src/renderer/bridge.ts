@@ -18,6 +18,18 @@ const updateRetryDelays = [1_500, 4_000]
 
 const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 
+async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  let timer: number | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => { timer = window.setTimeout(() => reject(new Error(message)), milliseconds) }),
+    ])
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer)
+  }
+}
+
 function retryableUpdateDownload(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /\b(?:404|408|429|500|502|503|504)\b/.test(message)
@@ -107,7 +119,11 @@ const api: AutoPromptApi = {
       const status = await sidecar<boolean>("session:status", { accountId: settings.accountId })
       if (!status.ok) return status
       if (!status.value) {
-        const session = await invoke<PreparedFlowpilotSession>("prepare_flowpilot_session", { accountId: settings.accountId })
+        const session = await withTimeout(
+          invoke<PreparedFlowpilotSession>("prepare_flowpilot_session", { accountId: settings.accountId }),
+          30_000,
+          "FlowPilot session preparation exceeded 30 seconds. Restart the app, try again, then inspect automation.log if it repeats.",
+        )
         const opened = await sidecar<null>("session:open", { accountId: settings.accountId, ...session })
         if (!opened.ok) return opened
       }
