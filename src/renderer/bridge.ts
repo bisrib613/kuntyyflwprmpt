@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
-import type { ApiResult, AssetInput, AutoPromptApi, FlowProject, FlowpilotAccount, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
+import type { ApiResult, AssetInput, AutoPromptApi, FlowProject, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
@@ -60,7 +60,14 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
 
 const api: AutoPromptApi = {
   listAccounts: () => sidecar<FlowpilotAccount[]>("accounts:list"),
-  connect: (accountId) => sidecar<FlowProject[]>("flow:connect", { accountId }),
+  connect: async (accountId) => {
+    try {
+      const session = await invoke<PreparedFlowpilotSession>("prepare_flowpilot_session", { accountId })
+      return sidecar<FlowProject[]>("flow:connect", { accountId, ...session })
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   pickAssets: async () => {
     try {
       const selected = await open({ multiple: true, filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "mp4", "mov"] }] })

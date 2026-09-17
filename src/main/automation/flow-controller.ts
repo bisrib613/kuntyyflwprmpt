@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core"
-import type { AssetInput, FlowProject, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
+import type { AssetInput, BrowserCookie, FlowProject, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
 import { flowSelectors } from "./selectors.js"
 
@@ -13,13 +13,14 @@ export class FlowController {
   private readonly assetRefs = new Map<string, string>()
   private constructor(private readonly context: BrowserContext, private readonly page: Page) {}
 
-  static async launch(profileDirectory: string): Promise<FlowController> {
+  static async launch(profileDirectory: string, cookies: BrowserCookie[]): Promise<FlowController> {
     const context = await chromium.launchPersistentContext(profileDirectory, {
       channel: "chrome",
       headless: false,
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },
     })
+    await context.addCookies(cookies)
     const page = context.pages()[0] || await context.newPage()
     return new FlowController(context, page)
   }
@@ -28,7 +29,7 @@ export class FlowController {
 
   async listProjects(): Promise<FlowProject[]> {
     await this.page.goto("https://flow.google.com/", { waitUntil: "domcontentloaded" })
-    if (this.page.url().includes("accounts.google.com")) throw new Error("The FlowPilot session snapshot is signed out. Open this account in FlowPilot and sign in first.")
+    if (this.page.url().includes("accounts.google.com")) throw new Error("The selected FlowPilot session is signed out. Open this account in FlowPilot and sign in first.")
     await this.page.locator('a[aria-label="Open project"]').first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined)
     return this.page.locator('a[aria-label="Open project"]').evaluateAll((anchors) => anchors.map((anchor) => {
       const href = anchor.getAttribute("href") || ""

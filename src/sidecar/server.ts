@@ -1,10 +1,10 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import os from "node:os"
 import path from "node:path"
-import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
+import os from "node:os"
+import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
 import { QueueRunner } from "../main/automation/queue-runner.js"
-import { listFlowpilotAccounts, snapshotFlowpilotProfile } from "../main/session/flowpilot.js"
+import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 
 const tokenIndex = process.argv.indexOf("--token")
 const token = tokenIndex >= 0 ? process.argv[tokenIndex + 1] : ""
@@ -38,12 +38,19 @@ async function request(method: string, params: unknown): Promise<unknown> {
       return accounts
     case "flow:connect": {
       const accountId = typeof input.accountId === "string" ? input.accountId : ""
+      const profilePath = typeof input.profilePath === "string" ? input.profilePath : ""
+      const cookies = Array.isArray(input.cookies) ? input.cookies as BrowserCookie[] : []
       accounts = await listFlowpilotAccounts()
       const account = accounts.find((candidate) => candidate.id === accountId)
       if (!account) throw new Error("Select a valid Google Flow account from FlowPilot.")
+      const snapshotRoot = path.join(os.tmpdir(), "kuntyy-autoprompt-sessions")
+      const relative = path.relative(snapshotRoot, profilePath)
+      if (!profilePath || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Invalid temporary automation profile path.")
+      if (!cookies.length || cookies.some((cookie) => !cookie || typeof cookie.name !== "string" || typeof cookie.value !== "string" || typeof cookie.domain !== "string")) {
+        throw new Error("FlowPilot did not provide a valid signed-in Google session.")
+      }
       await closeRunner()
-      const snapshot = await snapshotFlowpilotProfile(account, path.join(os.tmpdir(), "kuntyy-autoprompt-sessions"))
-      runner = new QueueRunner(account, snapshot, emit)
+      runner = new QueueRunner(account, profilePath, cookies, emit)
       connectedAccountId = account.id
       return (await runner.connect()).listProjects()
     }

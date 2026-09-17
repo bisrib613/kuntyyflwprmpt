@@ -1,4 +1,4 @@
-import { access, cp, mkdir, mkdtemp, readFile } from "node:fs/promises"
+import { access, readFile } from "node:fs/promises"
 import { constants } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -39,30 +39,7 @@ export async function listFlowpilotAccounts(root = defaultFlowpilotRoot()): Prom
     if (typeof row.name !== "string") continue
     const profilePath = path.join(root, "webview-profiles", `flow-${row.id}`)
     if (!(await exists(profilePath))) continue
-    accounts.push({ id: row.id, name: row.name, email: typeof row.email === "string" ? row.email : null, profilePath })
+    accounts.push({ id: row.id, name: row.name, email: typeof row.email === "string" ? row.email : null })
   }
   return accounts
-}
-
-const skippedProfileEntry = (source: string): boolean => {
-  const name = path.basename(source)
-  return ["Cache", "Code Cache", "GPUCache", "DawnCache", "ShaderCache", "SingletonCookie", "SingletonLock", "SingletonSocket"].includes(name)
-}
-
-export async function snapshotFlowpilotProfile(account: FlowpilotAccount, snapshotRoot: string): Promise<string> {
-  if (!SAFE_ID.test(account.id)) throw new Error("Invalid FlowPilot account id.")
-  await mkdir(snapshotRoot, { recursive: true })
-  const destination = await mkdtemp(path.join(snapshotRoot, `flow-${account.id}-`))
-  try {
-    await cp(account.profilePath, destination, {
-      recursive: true,
-      force: false,
-      errorOnExist: false,
-      filter: (source) => !skippedProfileEntry(source),
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`FlowPilot session snapshot failed. Close the active Flow profile and retry. ${message}`)
-  }
-  return destination
 }
