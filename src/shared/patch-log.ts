@@ -5,6 +5,7 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Create a minimal cookie-only FlowPilot session snapshot instead of copying the complete WebView2 profile.",
   "Prevent Windows Terminal from opening alongside the desktop application.",
   "Retry transient GitHub release download errors and refresh updater metadata between attempts.",
   "Publish releases as drafts until all updater assets have uploaded successfully.",
