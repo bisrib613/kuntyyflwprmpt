@@ -194,47 +194,34 @@ fn prepare_flowpilot_session(
     let label_for_webview = label.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
     let open_result = app.run_on_main_thread(move || {
-        let result = (|| -> Result<(), String> {
-            let window = app_for_webview
-                .get_window("main")
-                .ok_or_else(|| "Main window is unavailable.".to_string())?;
-            let webview = window
-                .add_child(
-                    tauri::webview::WebviewBuilder::new(
-                        label_for_webview,
-                        WebviewUrl::External(
-                            "about:blank"
-                                .parse()
-                                .map_err(|error| format!("Invalid session export URL: {error}"))?,
-                        ),
-                    )
-                    .data_directory(snapshot_for_webview)
-                    .focused(false),
-                    tauri::LogicalPosition::new(-10_000.0, -10_000.0),
-                    tauri::LogicalSize::new(1.0, 1.0),
-                )
-                .map_err(|error| error.to_string())?;
-            webview.hide().map_err(|error| error.to_string())?;
-            Ok(())
-        })();
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_for_webview,
+            label_for_webview,
+            WebviewUrl::External("about:blank".parse().expect("about:blank is a valid URL")),
+        )
+        .data_directory(snapshot_for_webview)
+        .visible(false)
+        .focused(false)
+        .inner_size(1.0, 1.0)
+        .position(-10_000.0, -10_000.0)
+        .build()
+        .map_err(|error| error.to_string());
         let _ = sender.send(result);
     });
     if let Err(error) = open_result {
         let _ = fs::remove_dir_all(&snapshot);
         return Err(error.to_string());
     }
-    if let Err(error) = receiver
+    let webview = match receiver
         .recv_timeout(Duration::from_secs(15))
         .map_err(|_| "Timed out while opening the FlowPilot session snapshot.".to_string())
         .and_then(|result| result)
     {
-        let _ = fs::remove_dir_all(&snapshot);
-        return Err(error);
-    }
-
-    let Some(webview) = app.get_webview(&label) else {
-        let _ = fs::remove_dir_all(&snapshot);
-        return Err("Session export WebView is unavailable.".to_string());
+        Ok(webview) => webview,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&snapshot);
+            return Err(error);
+        }
     };
     let result = webview.cookies().map_err(|error| error.to_string()).map(|cookies| {
         cookies
