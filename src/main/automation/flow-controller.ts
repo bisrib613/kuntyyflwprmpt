@@ -3,6 +3,7 @@ import path from "node:path"
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core"
 import type { AssetInput, BrowserCookie, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
+import { FLOW_APP_URL, isSignedOutFlowRoute } from "./flow-route.js"
 import { flowSelectors } from "./selectors.js"
 import { logAutomation } from "../../sidecar/logger.js"
 
@@ -35,10 +36,14 @@ export class FlowController {
   async close(): Promise<void> { await this.context.close() }
 
   private async openFlowHome(): Promise<void> {
-    logAutomation("flow.navigation.start", { destination: "home" })
-    await this.page.goto("https://flow.google.com/", { waitUntil: "domcontentloaded" })
-    logAutomation("flow.navigation.complete", { destination: "home", pathname: new URL(this.page.url()).pathname })
-    if (this.page.url().includes("accounts.google.com")) throw new Error("The selected FlowPilot session is signed out. Open this account in FlowPilot and sign in first.")
+    logAutomation("flow.navigation.start", { destination: "app", url: FLOW_APP_URL })
+    await this.page.goto(FLOW_APP_URL, { waitUntil: "domcontentloaded" })
+    await this.page.waitForTimeout(1_000)
+    const current = new URL(this.page.url())
+    logAutomation("flow.navigation.complete", { destination: "app", hostname: current.hostname, pathname: current.pathname })
+    if (isSignedOutFlowRoute(current.href)) {
+      throw new Error("The selected FlowPilot session is signed out. Open this account in FlowPilot and sign in first.")
+    }
   }
 
   private useProject(id: string): void {

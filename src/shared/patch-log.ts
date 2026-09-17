@@ -5,6 +5,8 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Open the authenticated Google Flow application route instead of the public marketing page.",
+  "Detect flow.google.com/about redirects as a signed-out FlowPilot session.",
   "Keep the automation sidecar alive when the temporary cookie-export WebView closes.",
   "Separate updater download from installation and bound update network operations with timeouts.",
   "Prevent concurrent update checks and surface automation bridge failures without unhandled polling errors.",
