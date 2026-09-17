@@ -5,6 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Prevent Windows Terminal from opening alongside the desktop application.",
+  "Retry transient GitHub release download errors and refresh updater metadata between attempts.",
+  "Publish releases as drafts until all updater assets have uploaded successfully.",
   "Transfer signed-in Google cookies from a native WebView2 snapshot into the Chrome automation context.",
   "Clean temporary session snapshots after cookie export and temporary Chrome profiles when automation closes.",
   "Use the user's installed Node.js runtime instead of bundling a duplicate executable.",
