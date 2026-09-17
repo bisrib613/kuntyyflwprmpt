@@ -139,6 +139,10 @@ fn valid_account_id(value: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
 }
 
+fn should_stop_sidecar(window_label: &str, destroyed: bool) -> bool {
+    destroyed && window_label == "main"
+}
+
 const SESSION_PROFILE_FILES: &[&[&str]] = &[
     &["Local State"],
     &["First Run"],
@@ -432,7 +436,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
         endpoint: format!("http://127.0.0.1:{}/request", ready.port),
         token,
         client: reqwest::Client::builder()
-            .timeout(Duration::from_secs(90))
+            .timeout(Duration::from_secs(30))
             .build()
             .map_err(|error| format!("Unable to initialize the automation bridge: {error}"))?,
         child: Mutex::new(child),
@@ -441,7 +445,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::{command_path, copy_session_profile, google_cookie_domain, safe_log_value, valid_account_id};
+    use super::{command_path, copy_session_profile, google_cookie_domain, safe_log_value, should_stop_sidecar, valid_account_id};
     use std::fs;
 
     #[test]
@@ -474,6 +478,13 @@ mod path_tests {
     }
 
     #[test]
+    fn only_main_window_destruction_stops_the_sidecar() {
+        assert!(should_stop_sidecar("main", true));
+        assert!(!should_stop_sidecar("flowpilot-session-export-test", true));
+        assert!(!should_stop_sidecar("main", false));
+    }
+
+    #[test]
     fn limits_exported_cookies_to_google_domains() {
         assert!(google_cookie_domain(".google.com"));
         assert!(google_cookie_domain("accounts.google.com"));
@@ -503,18 +514,37 @@ mod path_tests {
 }
 
 #[tauri::command]
-async fn sidecar_request(state: tauri::State<'_, AutomationBackend>, method: String, params: Value) -> Result<Value, String> {
+async fn sidecar_request(app: tauri::AppHandle, state: tauri::State<'_, AutomationBackend>, method: String, params: Value) -> Result<Value, String> {
+    let traced = method != "events:poll";
+    let method_log = safe_log_value(&method);
+    if traced {
+        append_automation_log(&app, "bridge.request.start", &format!("method={method_log}"));
+    }
     let state = match &*state {
         AutomationBackend::Ready(state) => state,
-        AutomationBackend::Unavailable(error) => return Ok(json!({ "ok": false, "error": error })),
+        AutomationBackend::Unavailable(error) => {
+            if traced {
+                append_automation_log(&app, "bridge.request.unavailable", &format!("method={method_log}"));
+            }
+            return Ok(json!({ "ok": false, "error": error }));
+        }
     };
-    state.client
-        .post(&state.endpoint)
-        .bearer_auth(&state.token)
-        .json(&json!({ "method": method, "params": params }))
-        .send().await.map_err(|error| format!("Automation runtime is unavailable: {error}"))?
-        .error_for_status().map_err(|error| error.to_string())?
-        .json::<Value>().await.map_err(|error| format!("Invalid automation response: {error}"))
+    let result = async {
+        state.client
+            .post(&state.endpoint)
+            .bearer_auth(&state.token)
+            .json(&json!({ "method": method, "params": params }))
+            .send().await.map_err(|error| format!("Automation runtime is unavailable: {error}"))?
+            .error_for_status().map_err(|error| error.to_string())?
+            .json::<Value>().await.map_err(|error| format!("Invalid automation response: {error}"))
+    }.await;
+    if traced {
+        match &result {
+            Ok(_) => append_automation_log(&app, "bridge.request.complete", &format!("method={method_log}")),
+            Err(error) => append_automation_log(&app, "bridge.request.failed", &format!("method={method_log} error={}", safe_log_value(error))),
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -556,7 +586,7 @@ pub fn run() {
             prepare_flowpilot_session
         ])
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
+            if should_stop_sidecar(window.label(), matches!(event, tauri::WindowEvent::Destroyed)) {
                 if let Some(backend) = window.try_state::<AutomationBackend>() {
                     if let AutomationBackend::Ready(state) = &*backend {
                         if let Ok(mut child) = state.child.lock() { let _ = child.kill(); }

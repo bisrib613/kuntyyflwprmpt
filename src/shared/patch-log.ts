@@ -5,6 +5,10 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Keep the automation sidecar alive when the temporary cookie-export WebView closes.",
+  "Separate updater download from installation and bound update network operations with timeouts.",
+  "Prevent concurrent update checks and surface automation bridge failures without unhandled polling errors.",
+  "Enforce unused TypeScript symbol checks in both renderer and automation builds.",
   "Prevent a main-thread deadlock while opening the hidden FlowPilot cookie-export WebView.",
   "Write persistent automation.log and crash.log files under the application LocalAppData logs folder.",
   "Record session export, Chrome launch, navigation, project routing, queue phases, and failures without logging cookies or prompt contents.",

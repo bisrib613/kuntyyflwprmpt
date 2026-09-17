@@ -223,6 +223,8 @@ export function App() {
           {updateState.phase === "downloaded" && <button className="primary" onClick={() => void updateAction("install")}>Restart and install</button>}
           {updateState.phase === "checking" && <button className="secondary" disabled>Checking…</button>}
           {updateState.phase === "downloading" && <button className="secondary" disabled>Downloading {updateState.percent || 0}%</button>}
+          {updateState.phase === "installing" && <button className="secondary" disabled>Installing…</button>}
+          {updateState.phase === "restarting" && <button className="secondary" disabled>Restarting…</button>}
         </div>
         <div className="patch-log">
           <div className="patch-log-heading"><span>Patch log</span><strong>Next update</strong></div>
