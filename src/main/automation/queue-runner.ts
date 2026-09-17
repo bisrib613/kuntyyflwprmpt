@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import type { FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
+import { rm } from "node:fs/promises"
+import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
 import { FlowController } from "./flow-controller.js"
 
 export class QueueRunner {
@@ -10,12 +11,13 @@ export class QueueRunner {
 
   constructor(
     private readonly account: FlowpilotAccount,
-    private readonly profileSnapshot: string,
+    private readonly profileDirectory: string,
+    private readonly cookies: BrowserCookie[],
     private readonly emit: (event: QueueEvent) => void,
   ) {}
 
   async connect(): Promise<FlowController> {
-    if (!this.controller) this.controller = await FlowController.launch(this.profileSnapshot)
+    if (!this.controller) this.controller = await FlowController.launch(this.profileDirectory, this.cookies)
     return this.controller
   }
 
@@ -67,5 +69,12 @@ export class QueueRunner {
     }
   }
 
-  async close(): Promise<void> { await this.controller?.close(); this.controller = null }
+  async close(): Promise<void> {
+    try {
+      await this.controller?.close()
+    } finally {
+      this.controller = null
+      await rm(this.profileDirectory, { recursive: true, force: true })
+    }
+  }
 }
