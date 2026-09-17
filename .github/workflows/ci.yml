@@ -51,6 +51,27 @@ jobs:
       - name: Enforce installer size below 50 MiB
         run: npm run verify:installer
 
+      - name: Smoke test installed application startup
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
+          Start-Process $installer.FullName -ArgumentList "/S" -Wait
+
+          $app = Get-ChildItem $env:LOCALAPPDATA -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @("Kuntyy AutoPrompt.exe", "kuntyy-autoprompt.exe") } |
+            Select-Object -First 1
+          if (-not $app) { throw "Installed application executable was not found." }
+
+          $process = Start-Process $app.FullName -PassThru
+          Start-Sleep -Seconds 10
+          if ($process.HasExited) {
+            Get-ChildItem "$env:LOCALAPPDATA/com.kuntyy.autoprompt/logs" -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName }
+            throw "Installed application exited during the startup smoke test (exit code $($process.ExitCode))."
+          }
+          Stop-Process -Id $process.Id -Force
+
       - name: Upload test installer
         uses: actions/upload-artifact@v4
         with:

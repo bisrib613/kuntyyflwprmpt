@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    io::{BufRead, BufReader},
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Write},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{mpsc, Mutex},
     time::Duration,
@@ -15,10 +17,27 @@ struct AutomationState {
     child: Mutex<Child>,
 }
 
+enum AutomationBackend {
+    Ready(AutomationState),
+    Unavailable(String),
+}
+
 #[derive(Deserialize)]
 struct ReadyMessage {
     ready: bool,
     port: u16,
+}
+
+fn startup_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.join("startup.log"))
+}
+
+fn append_startup_log(app: &tauri::AppHandle, message: &str) {
+    let Ok(path) = startup_log_path(app) else { return };
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else { return };
+    let _ = writeln!(file, "{message}");
 }
 
 fn sidecar_paths(app: &tauri::AppHandle) -> Result<(String, String), String> {
@@ -39,10 +58,26 @@ fn sidecar_paths(app: &tauri::AppHandle) -> Result<(String, String), String> {
 
 fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
     let (node, script) = sidecar_paths(app)?;
+    append_startup_log(app, &format!("Starting automation runtime. node={node}; script={script}"));
+    if !std::path::Path::new(&node).is_file() {
+        return Err(format!("Bundled Node runtime is missing: {node}"));
+    }
+    if !std::path::Path::new(&script).is_file() {
+        return Err(format!("Bundled automation script is missing: {script}"));
+    }
     let token = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
     let mut command = Command::new(&node);
     command.args([&script, "--token", &token]).stdin(Stdio::null()).stdout(Stdio::piped());
-    if cfg!(debug_assertions) { command.stderr(Stdio::inherit()); } else { command.stderr(Stdio::null()); }
+    if cfg!(debug_assertions) {
+        command.stderr(Stdio::inherit());
+    } else {
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(startup_log_path(app)?)
+            .map_err(|error| format!("Unable to open the startup log: {error}"))?;
+        command.stderr(Stdio::from(log));
+    }
 
     #[cfg(windows)]
     {
@@ -90,7 +125,11 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 }
 
 #[tauri::command]
-async fn sidecar_request(state: tauri::State<'_, AutomationState>, method: String, params: Value) -> Result<Value, String> {
+async fn sidecar_request(state: tauri::State<'_, AutomationBackend>, method: String, params: Value) -> Result<Value, String> {
+    let state = match &*state {
+        AutomationBackend::Ready(state) => state,
+        AutomationBackend::Unavailable(error) => return Ok(json!({ "ok": false, "error": error })),
+    };
     state.client
         .post(&state.endpoint)
         .bearer_auth(&state.token)
@@ -118,15 +157,27 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let state = start_sidecar(&app.handle()).map_err(std::io::Error::other)?;
-            app.manage(state);
+            let backend = match start_sidecar(&app.handle()) {
+                Ok(state) => {
+                    append_startup_log(&app.handle(), "Automation runtime is ready.");
+                    AutomationBackend::Ready(state)
+                }
+                Err(error) => {
+                    let message = format!("Automation runtime is unavailable: {error}");
+                    append_startup_log(&app.handle(), &message);
+                    AutomationBackend::Unavailable(message)
+                }
+            };
+            app.manage(backend);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![sidecar_request, read_prompt_file])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                if let Some(state) = window.try_state::<AutomationState>() {
-                    if let Ok(mut child) = state.child.lock() { let _ = child.kill(); }
+                if let Some(backend) = window.try_state::<AutomationBackend>() {
+                    if let AutomationBackend::Ready(state) = &*backend {
+                        if let Ok(mut child) = state.child.lock() { let _ = child.kill(); }
+                    }
                 }
             }
         })

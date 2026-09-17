@@ -9,6 +9,8 @@ on:
         default: patch
         type: choice
         options: [patch, minor, major]
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -19,6 +21,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]')
     runs-on: windows-latest
     steps:
       - name: Check out main
@@ -52,7 +55,7 @@ jobs:
         id: version
         shell: pwsh
         env:
-          BUMP: ${{ inputs.bump }}
+          BUMP: ${{ inputs.bump || 'patch' }}
         run: |
           npm version $env:BUMP --no-git-tag-version
           $version = node -p "require('./package.json').version"
