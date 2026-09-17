@@ -5,6 +5,8 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Prevented an unavailable automation runtime from closing the application during startup.",
+  "Added a local startup diagnostic log and an installed-app smoke test to Windows CI.",
   "Application name changed to Kuntyy AutoPrompt.",
   "Update channel and release metadata now use a low-profile repository identity.",
   "Detailed patch notes moved from GitHub releases into the application.",
