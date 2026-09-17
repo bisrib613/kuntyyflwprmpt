@@ -5,6 +5,8 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Transfer signed-in Google cookies from a native WebView2 snapshot into the Chrome automation context.",
+  "Clean temporary session snapshots after cookie export and temporary Chrome profiles when automation closes.",
   "Use the user's installed Node.js runtime instead of bundling a duplicate executable.",
   "Normalized Windows resource paths before starting the automation sidecar.",
   "Require Windows CI to verify that the installed automation runtime becomes ready.",
