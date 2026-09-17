@@ -5,6 +5,7 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Prevent a main-thread deadlock while opening the hidden FlowPilot cookie-export WebView.",
   "Write persistent automation.log and crash.log files under the application LocalAppData logs folder.",
   "Record session export, Chrome launch, navigation, project routing, queue phases, and failures without logging cookies or prompt contents.",
   "Stop waiting after 30 seconds when FlowPilot session preparation does not return.",
