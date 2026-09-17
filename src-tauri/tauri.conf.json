@@ -34,7 +34,6 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/node.exe",
       "resources/automation/**/*"
     ],
     "windows": {
