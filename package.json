@@ -12,6 +12,7 @@
     "test": "vitest run --root .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.sidecar.json --noEmit",
     "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "verify:installer": "node scripts/verify-release.mjs --allow-unsigned",
     "verify:release": "node scripts/verify-release.mjs",
     "tauri": "tauri"
   },
