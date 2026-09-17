@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import "./bridge"
 import type { AssetInput, DownloadQuality, FlowProject, FlowpilotAccount, OutputKind, PromptJob, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
 import { NEXT_UPDATE_PATCHES, PATCH_LOG } from "../shared/patch-log"
 import { parsePromptFile } from "../shared/prompt-file"
@@ -47,13 +48,14 @@ export function App() {
       if (!result.value.length) setMessage("No signed-in Google Flow profiles were found in FlowPilot.")
     })
     void window.autoPrompt.getUpdateState().then(setUpdateState)
+    const updateTimer = window.setTimeout(() => { void window.autoPrompt.checkForUpdates() }, 15_000)
     const stopQueueEvents = window.autoPrompt.onQueueEvent((event: QueueEvent) => {
       setMessage(event.message)
       if (event.jobId) setJobs((current) => current.map((job) => job.id === event.jobId ? { ...job, status: event.status as PromptJob["status"], progress: event.progress ?? job.progress, downloads: event.downloads ?? job.downloads, error: event.status === "failed" ? event.message : undefined } : job))
       if (event.status === "stopped") setRunning(false)
     })
     const stopUpdateEvents = window.autoPrompt.onUpdateState(setUpdateState)
-    return () => { stopQueueEvents(); stopUpdateEvents() }
+    return () => { window.clearTimeout(updateTimer); stopQueueEvents(); stopUpdateEvents() }
   }, [])
 
   useEffect(() => {

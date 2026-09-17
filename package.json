@@ -4,19 +4,22 @@
   "private": true,
   "description": "Desktop queue runner for Google Flow using local FlowPilot sessions.",
   "author": "bisrib613",
-  "main": "dist-electron/main/main.js",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on tcp:5173 file:dist-electron/main/main.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
-    "build": "tsc -p tsconfig.electron.json && vite build",
+    "dev": "npm run build:sidecar && vite",
+    "build": "npm run build:sidecar && tsc --noEmit && vite build && npm run prepare:sidecar",
+    "build:sidecar": "tsc -p tsconfig.sidecar.json",
     "test": "vitest run --root .",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.sidecar.json --noEmit",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
     "verify:release": "node scripts/verify-release.mjs",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "tauri": "tauri"
   },
   "dependencies": {
-    "electron-updater": "6.8.9",
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.3",
+    "@tauri-apps/plugin-process": "2.3.1",
+    "@tauri-apps/plugin-updater": "2.11.0",
     "playwright-core": "1.63.0"
   },
   "devDependencies": {
@@ -24,65 +27,11 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "concurrently": "10.0.5",
-    "cross-env": "10.1.0",
-    "electron": "44.4.1",
-    "electron-builder": "26.15.3",
+    "@tauri-apps/cli": "2.11.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "typescript": "7.0.2",
     "vite": "8.3.0",
-    "vitest": "5.0.1",
-    "wait-on": "9.1.0"
-  },
-  "build": {
-    "appId": "com.kuntyy.autoprompt",
-    "productName": "Kuntyy AutoPrompt",
-    "artifactName": "Kuntyy-AutoPrompt-${version}-${arch}.${ext}",
-    "asar": true,
-    "afterPack": "scripts/after-pack.cjs",
-    "compression": "maximum",
-    "electronLanguages": [
-      "en-US",
-      "id"
-    ],
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "package.json",
-      "!node_modules/playwright-core/lib/vite/**/*",
-      "!node_modules/playwright-core/lib/tools/**/*"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "bisrib613",
-        "repo": "kuntyyflwprmpt",
-        "releaseType": "release"
-      }
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "deleteAppDataOnUninstall": false
-    }
+    "vitest": "5.0.1"
   }
 }

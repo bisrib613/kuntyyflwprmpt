@@ -2,16 +2,18 @@
 
 ## Process boundaries
 
-- **Electron main:** owns filesystem access, FlowPilot profile discovery, session snapshotting, Playwright, queue lifecycle, and downloads.
-- **Preload:** exposes a narrow typed IPC API. No raw Electron or Node object reaches the renderer.
+- **Tauri host:** owns native dialogs, updater verification, sidecar lifecycle, and the authenticated localhost bridge.
+- **Node sidecar:** owns FlowPilot profile discovery, session snapshotting, Playwright, queue lifecycle, and downloads.
 - **React renderer:** configuration and queue UI only.
 - **Flow adapter:** contains every Google Flow selector and behavior. UI components never query Flow DOM directly.
 
+The host creates a random 256-bit token for each launch, passes it to the child process, and accepts sidecar responses only over loopback with bearer authentication. The renderer cannot choose a binary or arbitrary command to execute.
+
 ## Session snapshot
 
-FlowPilot stores accounts at the Tauri local-data directory for `com.flowpilot.desktop` and service profiles under `webview-profiles/flow-{accountId}`. AutoPrompt validates the account ID, reads account metadata, copies the selected profile to its own user-data directory, then launches installed Microsoft Edge with that copy.
+FlowPilot stores accounts at the Tauri local-data directory for `com.flowpilot.desktop` and service profiles under `webview-profiles/flow-{accountId}`. AutoPrompt validates the account ID, reads account metadata, copies the selected profile to its own temporary user-data directory, then launches installed Google Chrome with that copy.
 
-This is deliberately a snapshot rather than shared live profile access. Chromium profile databases are not safe for simultaneous writes by two applications. A later FlowPilot companion protocol may provide coordinated live-session leasing, but it is not required by the v0.1 repository.
+This is deliberately a snapshot rather than shared live profile access. Chromium profile databases are not safe for simultaneous writes by two applications. However, a WebView2 profile and a Chrome profile must not be assumed to have interchangeable encrypted authentication state merely because their files look similar. Live Windows validation with a real FlowPilot account is a release gate. If that validation fails, session sync must move to an explicit FlowPilot companion handoff; the tool must never report a copied-but-signed-out profile as synchronized.
 
 ## Automation state machine
 
@@ -42,12 +44,14 @@ The Flow asset picker does not expose a stable asset ID on its option button. It
 
 ## Packaging
 
-Electron is used because Playwright runs directly in the main process and can launch the installed Edge browser without a Rust/Node sidecar. The initial Windows bundle uses NSIS.
+Tauri supplies the desktop shell and Windows NSIS setup wizard. The package includes a small Node runtime and a pruned `playwright-core` sidecar, but no Chromium, ChromeDriver, Electron, or browser cache. Playwright launches the user's installed Chrome through its supported `chrome` channel.
+
+The release verifier rejects an installer at or above 50 MiB and rejects unsigned updater artifacts. This is a build invariant, not an informal target.
 
 ## Update channel
 
-`electron-updater` reads the GitHub provider configuration generated into the packaged application. Automatic startup checks do not automatically download; the user starts the transfer from the Updates menu. The main process owns checking, downloading, and `quitAndInstall`; the renderer receives typed state only.
+Tauri Updater reads `latest.json` from GitHub Releases. The user starts the transfer from the Updates menu; the installer is verified against the public key compiled into the app before installation. The private signing key exists only in GitHub Actions secrets.
 
-GitHub Actions runs on `windows-latest` with Node 24. A manual patch/minor/major release verifies tests, bumps both package manifests, builds NSIS artifacts, pushes the version commit and tag, then creates the release with `.exe`, `.blockmap`, and `latest.yml`.
+GitHub Actions runs on `windows-latest` with Node 24 and stable Rust. A manual patch/minor/major release verifies tests, bumps the JavaScript, Rust, and Tauri manifests, builds signed NSIS artifacts, enforces the size gate, pushes the version commit and tag, then creates the release with the setup executable, signature, and `latest.json`.
 
 Public GitHub release assets are required by this configuration. A private source repository must publish update artifacts through a public release repository or an authenticated update service; a reusable GitHub token must never be embedded in the client.

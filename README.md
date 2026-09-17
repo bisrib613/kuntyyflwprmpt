@@ -1,10 +1,10 @@
 # Kuntyy AutoPrompt
 
-Standalone Google Flow prompt queue and auto-downloader using local FlowPilot sessions.
+Lightweight Google Flow prompt queue and auto-downloader using local FlowPilot sessions and the user's installed Google Chrome.
 
 ## Current status
 
-The v0.1 repository includes the PRD, desktop UI, FlowPilot account/profile discovery, safe profile snapshotting, project discovery/creation, queue lifecycle, native Google Flow settings, result-card download routing, quality fallbacks, and tests. Live selectors are isolated in the Flow adapter because Google Flow may change them.
+The repository includes the desktop UI, FlowPilot account/profile discovery, isolated session snapshots, project discovery/creation, single and bulk queues, per-job and global assets, native Google Flow settings, result-card download routing, quality fallbacks, and tests. Live selectors are isolated in the Flow adapter because Google Flow may change them.
 
 ## Development
 
@@ -16,14 +16,14 @@ npm run build
 npm run dev
 ```
 
-Microsoft Edge and an existing FlowPilot Google Flow session are required for a real run.
+Google Chrome and an existing FlowPilot Google Flow session are required for a real run. ChromeDriver and a bundled browser are not used.
 
 ## Windows release and updates
 
-The GitHub workflow **Release Windows Installer** accepts `patch`, `minor`, or `major`. It verifies the source, bumps `package.json` and `package-lock.json`, builds the x64 NSIS installer, pushes the version commit/tag, and publishes the installer, blockmap, and `latest.yml`.
+The GitHub workflow **Release Windows Installer** accepts `patch`, `minor`, or `major`. It verifies the source, bumps the manifests, packages the Node automation sidecar, builds the x64 NSIS setup wizard, enforces a hard installer limit below 50 MiB, pushes the version commit/tag, and publishes signed Tauri update artifacts plus `latest.json`.
 
-Packaged builds check for updates 15 seconds after launch. Updates are downloaded only after user confirmation in the in-app Updates menu and installed through `quitAndInstall`, preserving application data.
+Packaged builds check for updates from the in-app Updates menu. Updates are downloaded only after user confirmation, cryptographically verified by Tauri, installed, and activated on restart.
 
-The configured GitHub updater feed is `bisrib613/kuntyyflwprmpt`. It must provide publicly readable releases. Do not embed a GitHub personal access token in the desktop application to access private releases; use a public release repository or a separately authenticated update service instead. Detailed patch notes live inside the application's Updates panel rather than GitHub release notes.
+The configured GitHub updater feed is `bisrib613/kuntyyflwprmpt`. Release assets must be publicly readable. Never embed a GitHub personal access token in the application; use a public release repository or a separately authenticated update service. The release workflow requires `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets. Detailed patch notes live inside the application's Updates panel.
 
 See [PRD](docs/PRD.md) and [Architecture](docs/ARCHITECTURE.md).
