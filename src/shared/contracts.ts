@@ -85,6 +85,8 @@ export type AutoPromptApi = {
   pickAssets(): Promise<ApiResult<AssetInput[]>>
   pickPromptFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   pickDownloadDirectory(): Promise<ApiResult<string | null>>
+  getLogDirectory(): Promise<ApiResult<string>>
+  openLogDirectory(): Promise<ApiResult<void>>
   startRun(settings: RunSettings): Promise<ApiResult<{ runId: string }>>
   stopRun(): Promise<ApiResult<void>>
   onQueueEvent(listener: (event: QueueEvent) => void): () => void

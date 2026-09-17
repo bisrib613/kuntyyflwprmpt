@@ -87,17 +87,29 @@ jobs:
       - name: Enforce installer size and updater signature
         run: npm run verify:release
 
+      - name: Normalize updater asset names
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
+          $releaseName = "Kuntyy-AutoPrompt-$env:VERSION-x64-setup.exe"
+          $releasePath = Join-Path $installer.DirectoryName $releaseName
+          Move-Item $installer.FullName $releasePath
+          Move-Item "$($installer.FullName).sig" "${releasePath}.sig"
+
       - name: Generate updater manifest
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/Kuntyy-AutoPrompt-$env:VERSION-x64-setup.exe" -File
           if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
           $signaturePath = "$($installer.FullName).sig"
           $signature = (Get-Content $signaturePath -Raw).Trim()
-          $assetName = [uri]::EscapeDataString($installer.Name)
+          $assetName = $installer.Name
           $manifest = @{
             version = $env:VERSION
             notes = "Update details are available inside the application."

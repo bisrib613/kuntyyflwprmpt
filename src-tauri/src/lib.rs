@@ -11,6 +11,8 @@ use std::{
 use tauri::Manager;
 use tauri::WebviewUrl;
 
+const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
 struct AutomationState {
     endpoint: String,
     token: String,
@@ -56,16 +58,43 @@ struct PreparedFlowpilotSession {
     cookies: Vec<BrowserCookie>,
 }
 
-fn startup_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    Ok(directory.join("startup.log"))
+fn install_log_directory_for_executable(executable: &std::path::Path) -> Result<PathBuf, String> {
+    executable
+        .parent()
+        .map(|directory| directory.join("logs"))
+        .ok_or_else(|| "Application installation directory is unavailable.".to_string())
 }
 
-fn automation_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
+fn log_directory() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Unable to locate the application executable: {error}"))?;
+    let directory = install_log_directory_for_executable(&executable)?;
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    Ok(directory.join("automation.log"))
+    Ok(directory)
+}
+
+fn rotate_log(path: &std::path::Path) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() < MAX_LOG_BYTES {
+        return;
+    }
+    let previous = path.with_extension("log.previous");
+    let _ = fs::remove_file(&previous);
+    let _ = fs::rename(path, previous);
+}
+
+fn append_log(file_name: &str, line: &str) -> Result<(), String> {
+    let path = log_directory()?.join(file_name);
+    rotate_log(&path);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("Unable to write {}: {error}", path.display()))?;
+    writeln!(file, "{line}")
+        .map_err(|error| format!("Unable to write {}: {error}", path.display()))
 }
 
 fn log_timestamp() -> u128 {
@@ -76,30 +105,21 @@ fn safe_log_value(value: &str) -> String {
     value.replace(['\r', '\n'], " ").chars().take(1_000).collect()
 }
 
-fn append_automation_log(app: &tauri::AppHandle, event: &str, details: &str) {
-    let Ok(path) = automation_log_path(app) else { return };
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else { return };
+fn append_automation_log(_app: &tauri::AppHandle, event: &str, details: &str) {
     let suffix = if details.is_empty() { String::new() } else { format!(" {details}") };
-    let _ = writeln!(file, "[{}] {event}{suffix}", log_timestamp());
+    let _ = append_log("automation.log", &format!("[{}] {event}{suffix}", log_timestamp()));
 }
 
-fn install_panic_log(app: &tauri::AppHandle) {
-    let Ok(directory) = app.path().app_log_dir() else { return };
-    let _ = fs::create_dir_all(&directory);
-    let crash_log = directory.join("crash.log");
+fn install_panic_log() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&crash_log) {
-            let _ = writeln!(file, "[{}] rust.panic {info}", log_timestamp());
-        }
+        let _ = append_log("crash.log", &format!("[{}] rust.panic {info}", log_timestamp()));
         previous(info);
     }));
 }
 
-fn append_startup_log(app: &tauri::AppHandle, message: &str) {
-    let Ok(path) = startup_log_path(app) else { return };
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else { return };
-    let _ = writeln!(file, "{message}");
+fn append_startup_log(_app: &tauri::AppHandle, message: &str) {
+    let _ = append_log("startup.log", message);
 }
 
 fn command_path(path: PathBuf) -> String {
@@ -382,18 +402,19 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
         return Err(format!("Bundled automation script is missing: {script}"));
     }
     let token = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
-    let log_directory = app.path().app_log_dir().map_err(|error| error.to_string())?;
-    fs::create_dir_all(&log_directory).map_err(|error| error.to_string())?;
-    let log_directory = command_path(log_directory);
+    let log_directory_arg = command_path(log_directory()?);
     let mut command = Command::new(&node);
-    command.args([&script, "--token", &token, "--log-dir", &log_directory]).stdin(Stdio::null()).stdout(Stdio::piped());
+    command
+        .args([&script, "--token", &token, "--log-dir", &log_directory_arg])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped());
     if cfg!(debug_assertions) {
         command.stderr(Stdio::inherit());
     } else {
         let log = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(startup_log_path(app)?)
+            .open(log_directory()?.join("startup.log"))
             .map_err(|error| format!("Unable to open the startup log: {error}"))?;
         command.stderr(Stdio::from(log));
     }
@@ -445,7 +466,11 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::{command_path, copy_session_profile, google_cookie_domain, safe_log_value, should_stop_sidecar, valid_account_id};
+    use super::{
+        command_path, copy_session_profile, google_cookie_domain,
+        install_log_directory_for_executable, safe_log_value, should_stop_sidecar,
+        valid_account_id,
+    };
     use std::fs;
 
     #[test]
@@ -475,6 +500,19 @@ mod path_tests {
     fn keeps_runtime_log_entries_on_one_bounded_line() {
         assert_eq!(safe_log_value("first\r\nsecond"), "first  second");
         assert_eq!(safe_log_value(&"x".repeat(1_001)).len(), 1_000);
+    }
+
+    #[test]
+    fn places_logs_next_to_the_installed_executable() {
+        let executable = std::path::Path::new("install-root")
+            .join("Kuntyy AutoPrompt")
+            .join("kuntyy-autoprompt.exe");
+        assert_eq!(
+            install_log_directory_for_executable(&executable).unwrap(),
+            std::path::Path::new("install-root")
+                .join("Kuntyy AutoPrompt")
+                .join("logs")
+        );
     }
 
     #[test]
@@ -558,6 +596,45 @@ fn read_prompt_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(file).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_log_directory() -> Result<String, String> {
+    Ok(command_path(log_directory()?))
+}
+
+#[tauri::command]
+fn open_log_directory() -> Result<(), String> {
+    let directory = log_directory()?;
+    #[cfg(windows)]
+    Command::new("explorer.exe")
+        .arg(&directory)
+        .spawn()
+        .map_err(|error| format!("Unable to open the logs folder: {error}"))?;
+    #[cfg(target_os = "macos")]
+    Command::new("open")
+        .arg(&directory)
+        .spawn()
+        .map_err(|error| format!("Unable to open the logs folder: {error}"))?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    Command::new("xdg-open")
+        .arg(&directory)
+        .spawn()
+        .map_err(|error| format!("Unable to open the logs folder: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn record_updater_event(event: String, message: String) -> Result<(), String> {
+    append_log(
+        "updater.log",
+        &format!(
+            "[{}] {} {}",
+            log_timestamp(),
+            safe_log_value(&event),
+            safe_log_value(&message)
+        ),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -565,7 +642,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            install_panic_log(&app.handle());
+            install_panic_log();
             let backend = match start_sidecar(&app.handle()) {
                 Ok(state) => {
                     append_startup_log(&app.handle(), "Automation runtime is ready.");
@@ -583,7 +660,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sidecar_request,
             read_prompt_file,
-            prepare_flowpilot_session
+            prepare_flowpilot_session,
+            get_log_directory,
+            open_log_directory,
+            record_updater_event
         ])
         .on_window_event(|window, event| {
             if should_stop_sidecar(window.label(), matches!(event, tauri::WindowEvent::Destroyed)) {

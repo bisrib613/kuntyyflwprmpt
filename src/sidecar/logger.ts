@@ -1,10 +1,9 @@
 import { appendFileSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs"
 import path from "node:path"
-import os from "node:os"
 
 const logDirIndex = process.argv.indexOf("--log-dir")
 const configuredLogDirectory = logDirIndex >= 0 ? process.argv[logDirIndex + 1] : ""
-export const logDirectory = configuredLogDirectory || path.join(process.env.LOCALAPPDATA || os.tmpdir(), "com.kuntyy.autoprompt", "logs")
+export const logDirectory = configuredLogDirectory || path.join(process.cwd(), "logs")
 const automationLog = path.join(logDirectory, "automation.log")
 const crashLog = path.join(logDirectory, "crash.log")
 const maxLogBytes = 2 * 1024 * 1024
