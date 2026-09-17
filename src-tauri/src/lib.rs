@@ -83,9 +83,8 @@ fn append_automation_log(app: &tauri::AppHandle, event: &str, details: &str) {
     let _ = writeln!(file, "[{}] {event}{suffix}", log_timestamp());
 }
 
-fn install_panic_log() {
-    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else { return };
-    let directory = PathBuf::from(local_app_data).join("com.kuntyy.autoprompt").join("logs");
+fn install_panic_log(app: &tauri::AppHandle) {
+    let Ok(directory) = app.path().app_log_dir() else { return };
     let _ = fs::create_dir_all(&directory);
     let crash_log = directory.join("crash.log");
     let previous = std::panic::take_hook();
@@ -526,12 +525,12 @@ fn read_prompt_file(path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    install_panic_log();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            install_panic_log(&app.handle());
             let backend = match start_sidecar(&app.handle()) {
                 Ok(state) => {
                     append_startup_log(&app.handle(), "Automation runtime is ready.");
