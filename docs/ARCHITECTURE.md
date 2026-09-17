@@ -21,6 +21,8 @@ This is deliberately a snapshot rather than shared live profile access. Chromium
 
 Failures are attached to the smallest scope possible. One variant download may fail without erasing files from completed variants. Account/session/project failures stop submission because continuing could target the wrong identity or project.
 
+The authenticated application entry point is `https://labs.google/fx/tools/flow`. The public `flow.google.com/about` marketing route is treated as signed out and is never used for project discovery.
+
 ## Selector policy
 
 Prefer observed accessible labels and roles:
