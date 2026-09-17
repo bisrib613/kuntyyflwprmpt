@@ -78,7 +78,7 @@ export function App() {
 
   const connect = async () => {
     if (!accountId) return
-    setConnecting(true); setMessage("Creating a safe local session snapshot…")
+    setConnecting(true); setMessage("Reading the FlowPilot sign-in session…")
     const result = await window.autoPrompt.connect(accountId)
     setConnecting(false)
     if (!result.ok) return setMessage(result.error)
