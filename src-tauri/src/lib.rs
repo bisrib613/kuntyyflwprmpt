@@ -336,12 +336,17 @@ fn prepare_flowpilot_session_inner(
 }
 
 #[tauri::command]
-fn prepare_flowpilot_session(
+async fn prepare_flowpilot_session(
     app: tauri::AppHandle,
     account_id: String,
 ) -> Result<PreparedFlowpilotSession, String> {
     append_automation_log(&app, "session.prepare.start", "");
-    let result = prepare_flowpilot_session_inner(app.clone(), account_id);
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        prepare_flowpilot_session_inner(worker_app, account_id)
+    })
+    .await
+    .map_err(|error| format!("FlowPilot session preparation worker failed: {error}"))?;
     match &result {
         Ok(session) => append_automation_log(&app, "session.prepare.complete", &format!("cookieCount={}", session.cookies.len())),
         Err(error) => append_automation_log(&app, "session.prepare.failed", &format!("error={}", safe_log_value(error))),
