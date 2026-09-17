@@ -7,8 +7,6 @@
     "core:default",
     "dialog:allow-open",
     "updater:default",
-    "process:allow-restart",
-    "allow-sidecar-request",
-    "allow-read-prompt-file"
+    "process:allow-restart"
   ]
 }
