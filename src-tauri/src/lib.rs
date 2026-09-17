@@ -105,39 +105,66 @@ fn valid_account_id(value: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
 }
 
-fn skipped_profile_entry(path: &std::path::Path) -> bool {
-    matches!(
-        path.file_name().and_then(|value| value.to_str()),
-        Some(
-            "Cache"
-                | "Code Cache"
-                | "GPUCache"
-                | "DawnCache"
-                | "ShaderCache"
-                | "SingletonCookie"
-                | "SingletonLock"
-                | "SingletonSocket"
-        )
-    )
+const SESSION_PROFILE_FILES: &[&[&str]] = &[
+    &["Local State"],
+    &["First Run"],
+    &["Default", "Preferences"],
+    &["Default", "Secure Preferences"],
+    &["Default", "Network", "Network Persistent State"],
+    &["Default", "Network", "Cookies"],
+    &["Default", "Network", "Cookies-journal"],
+    &["Default", "Network", "Cookies-wal"],
+    &["Default", "Network", "Cookies-shm"],
+    &["Default", "Cookies"],
+    &["Default", "Cookies-journal"],
+    &["Default", "Cookies-wal"],
+    &["Default", "Cookies-shm"],
+    &["EBWebView", "Local State"],
+    &["EBWebView", "First Run"],
+    &["EBWebView", "Default", "Preferences"],
+    &["EBWebView", "Default", "Secure Preferences"],
+    &["EBWebView", "Default", "Network", "Network Persistent State"],
+    &["EBWebView", "Default", "Network", "Cookies"],
+    &["EBWebView", "Default", "Network", "Cookies-journal"],
+    &["EBWebView", "Default", "Network", "Cookies-wal"],
+    &["EBWebView", "Default", "Network", "Cookies-shm"],
+    &["EBWebView", "Default", "Cookies"],
+    &["EBWebView", "Default", "Cookies-journal"],
+    &["EBWebView", "Default", "Cookies-wal"],
+    &["EBWebView", "Default", "Cookies-shm"],
+];
+
+fn session_relative_path(parts: &[&str]) -> PathBuf {
+    let mut path = PathBuf::new();
+    for part in parts {
+        path.push(part);
+    }
+    path
 }
 
-fn copy_profile(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+fn copy_session_profile(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
-    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let source_path = entry.path();
-        if skipped_profile_entry(&source_path) {
+    let mut copied_cookie_store = false;
+    for parts in SESSION_PROFILE_FILES {
+        let relative = session_relative_path(parts);
+        let source_path = source.join(&relative);
+        if !source_path.is_file() {
             continue;
         }
-        let destination_path = destination.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|error| error.to_string())?;
-        if file_type.is_dir() {
-            copy_profile(&source_path, &destination_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                format!("Unable to copy {}: {error}", source_path.display())
-            })?;
+        let destination_path = destination.join(&relative);
+        if let Some(parent) = destination_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
+        fs::copy(&source_path, &destination_path).map_err(|error| {
+            format!("Unable to copy {}: {error}", source_path.display())
+        })?;
+        if parts.last() == Some(&"Cookies") {
+            copied_cookie_store = true;
+        }
+    }
+    if !copied_cookie_store {
+        let _ = fs::remove_dir_all(destination);
+        return Err("FlowPilot's WebView2 cookie store was not found.".to_string());
     }
     Ok(())
 }
@@ -184,7 +211,7 @@ fn prepare_flowpilot_session(
     let session_root = std::env::temp_dir().join("kuntyy-autoprompt-sessions");
     let snapshot = session_root
         .join(format!("flow-{account_id}-{}", uuid::Uuid::new_v4().simple()));
-    copy_profile(&source, &snapshot).map_err(|error| {
+    copy_session_profile(&source, &snapshot).map_err(|error| {
         format!("FlowPilot session snapshot failed. Close the active Flow profile and retry. {error}")
     })?;
 
@@ -350,7 +377,8 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 
 #[cfg(test)]
 mod path_tests {
-    use super::{command_path, google_cookie_domain, valid_account_id};
+    use super::{command_path, copy_session_profile, google_cookie_domain, valid_account_id};
+    use std::fs;
 
     #[test]
     fn strips_windows_verbatim_prefix_from_local_paths() {
@@ -382,6 +410,25 @@ mod path_tests {
         assert!(google_cookie_domain("labs.google"));
         assert!(!google_cookie_domain("google.com.example.org"));
         assert!(!google_cookie_domain("example.org"));
+    }
+
+    #[test]
+    fn session_snapshot_copies_cookie_files_without_cache_data() {
+        let root = std::env::temp_dir().join(format!("kuntyy-session-copy-test-{}", uuid::Uuid::new_v4()));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("EBWebView/Default/Network")).unwrap();
+        fs::create_dir_all(source.join("EBWebView/Default/Cache")).unwrap();
+        fs::write(source.join("EBWebView/Local State"), "key").unwrap();
+        fs::write(source.join("EBWebView/Default/Network/Cookies"), "cookies").unwrap();
+        fs::write(source.join("EBWebView/Default/Cache/large.bin"), "cache").unwrap();
+
+        copy_session_profile(&source, &destination).unwrap();
+
+        assert!(destination.join("EBWebView/Local State").is_file());
+        assert!(destination.join("EBWebView/Default/Network/Cookies").is_file());
+        assert!(!destination.join("EBWebView/Default/Cache/large.bin").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
