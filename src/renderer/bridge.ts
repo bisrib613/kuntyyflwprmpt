@@ -14,6 +14,14 @@ const sidecar = <T>(method: string, params: Record<string, unknown> = {}): Promi
 const updateListeners = new Set<(state: UpdateState) => void>()
 let pendingUpdate: Update | null = null
 let updateState: UpdateState = { currentVersion: "0.0.0", phase: "idle", message: "Updates are checked automatically." }
+const updateRetryDelays = [1_500, 4_000]
+
+const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+
+function retryableUpdateDownload(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /\b(?:404|408|429|500|502|503|504)\b/.test(message)
+}
 
 function publishUpdate(patch: Partial<UpdateState>): void {
   updateState = { ...updateState, ...patch }
@@ -42,17 +50,32 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
   let transferred = 0
   let total: number | undefined
   try {
-    publishUpdate({ phase: "downloading", percent: 0, transferred: 0, total, message: "Downloading update… 0%" })
-    await pendingUpdate.downloadAndInstall((event) => {
-      if (event.event === "Started") total = event.data.contentLength ?? undefined
-      if (event.event === "Progress") transferred += event.data.chunkLength
-      const percent = total ? Math.min(100, Math.round((transferred / total) * 100)) : undefined
-      publishUpdate({ phase: "downloading", percent, transferred, total, message: percent === undefined ? "Downloading update…" : `Downloading update… ${percent}%` })
-    })
+    for (let attempt = 0; ; attempt += 1) {
+      transferred = 0
+      total = undefined
+      publishUpdate({ phase: "downloading", percent: 0, transferred, total, message: attempt === 0 ? "Downloading update… 0%" : `Retrying update download (${attempt + 1}/${updateRetryDelays.length + 1})…` })
+      try {
+        await pendingUpdate.downloadAndInstall((event) => {
+          if (event.event === "Started") total = event.data.contentLength ?? undefined
+          if (event.event === "Progress") transferred += event.data.chunkLength
+          const percent = total ? Math.min(100, Math.round((transferred / total) * 100)) : undefined
+          publishUpdate({ phase: "downloading", percent, transferred, total, message: percent === undefined ? "Downloading update…" : `Downloading update… ${percent}%` })
+        })
+        break
+      } catch (error) {
+        if (!retryableUpdateDownload(error) || attempt >= updateRetryDelays.length) throw error
+        publishUpdate({ phase: "downloading", percent: 0, transferred: 0, total: undefined, message: "GitHub is still preparing the release asset. Retrying automatically…" })
+        await wait(updateRetryDelays[attempt])
+        const refreshed = await check()
+        if (!refreshed) throw new Error("The update release is no longer available.")
+        pendingUpdate = refreshed
+      }
+    }
     publishUpdate({ phase: "downloaded", percent: 100, transferred, total, message: "Update installed. Restart to use it." })
     return { ok: true, value: undefined }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const raw = error instanceof Error ? error.message : String(error)
+    const message = retryableUpdateDownload(error) ? `GitHub did not make the installer available after ${updateRetryDelays.length + 1} attempts. Please try again in a moment. (${raw})` : raw
     publishUpdate({ phase: "error", message })
     return { ok: false, error: message }
   }

@@ -135,4 +135,6 @@ jobs:
           gh release create $env:TAG $env:installer $env:signature latest.json `
             --title "Kuntyy AutoPrompt $env:TAG" `
             --notes "Update details are available inside the application." `
+            --draft `
             --verify-tag
+          gh release edit $env:TAG --draft=false --latest
