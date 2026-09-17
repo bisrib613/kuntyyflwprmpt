@@ -5,6 +5,11 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Start Google Flow sessions automatically when Run queue is pressed; manual Connect is no longer required.",
+  "Route runs directly through the first recent project or the native Create project action.",
+  "Group multiple prompts with an explicit --- separator while preserving paragraph breaks inside each prompt.",
+  "Use compact per-job assets and share individual assets across jobs without uploading them again.",
+  "Added Google Flow, Docs, and Settings navigation without placeholder API features.",
   "Create a minimal cookie-only FlowPilot session snapshot instead of copying the complete WebView2 profile.",
   "Prevent Windows Terminal from opening alongside the desktop application.",
   "Retry transient GitHub release download errors and refresh updater metadata between attempts.",

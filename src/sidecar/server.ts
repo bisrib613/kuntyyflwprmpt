@@ -36,7 +36,11 @@ async function request(method: string, params: unknown): Promise<unknown> {
     case "accounts:list":
       accounts = await listFlowpilotAccounts()
       return accounts
-    case "flow:connect": {
+    case "session:status": {
+      const accountId = typeof input.accountId === "string" ? input.accountId : ""
+      return Boolean(runner && connectedAccountId === accountId)
+    }
+    case "session:open": {
       const accountId = typeof input.accountId === "string" ? input.accountId : ""
       const profilePath = typeof input.profilePath === "string" ? input.profilePath : ""
       const cookies = Array.isArray(input.cookies) ? input.cookies as BrowserCookie[] : []
@@ -52,19 +56,18 @@ async function request(method: string, params: unknown): Promise<unknown> {
       await closeRunner()
       runner = new QueueRunner(account, profilePath, cookies, emit)
       connectedAccountId = account.id
-      return (await runner.connect()).listProjects()
+      return null
     }
     case "queue:start": {
       const settings = input.settings as RunSettings | undefined
-      if (!settings || !runner || connectedAccountId !== settings.accountId) throw new Error("Connect the selected FlowPilot account before starting the queue.")
+      if (!settings || !runner || connectedAccountId !== settings.accountId) throw new Error("The selected FlowPilot session was not prepared. Start the queue again.")
       if (runner.isRunning) throw new Error("A queue is already running for this session.")
       if (!settings.jobs.length || settings.jobs.some((job) => !job.prompt.trim())) throw new Error("Every job requires a prompt.")
       const activeRunner = runner
-      void activeRunner.run(settings).catch((error) => emit({
-        runId: activeRunner.runId,
-        status: "stopped",
-        message: error instanceof Error ? error.message : String(error),
-      }))
+      void activeRunner.run(settings).catch(async (error) => {
+        emit({ runId: activeRunner.runId, status: "stopped", message: error instanceof Error ? error.message : String(error) })
+        if (runner === activeRunner) await closeRunner().catch(() => undefined)
+      })
       return { runId: activeRunner.runId }
     }
     case "queue:stop":
