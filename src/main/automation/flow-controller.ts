@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core"
-import type { AssetInput, BrowserCookie, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
+import type { AssetInput, BrowserCookie, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
 import { flowSelectors } from "./selectors.js"
 import { logAutomation } from "../../sidecar/logger.js"

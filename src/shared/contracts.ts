@@ -66,7 +66,7 @@ export type QueueEvent = {
   downloads?: string[]
 }
 
-export type UpdatePhase = "idle" | "checking" | "available" | "up-to-date" | "downloading" | "downloaded" | "error"
+export type UpdatePhase = "idle" | "checking" | "available" | "up-to-date" | "downloading" | "downloaded" | "installing" | "restarting" | "error"
 
 export type UpdateState = {
   currentVersion: string

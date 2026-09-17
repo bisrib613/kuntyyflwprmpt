@@ -14,7 +14,10 @@ const sidecar = <T>(method: string, params: Record<string, unknown> = {}): Promi
 const updateListeners = new Set<(state: UpdateState) => void>()
 let pendingUpdate: Update | null = null
 let updateState: UpdateState = { currentVersion: "0.0.0", phase: "idle", message: "Updates are checked automatically." }
+let updateCheck: Promise<ApiResult<void>> | null = null
 const updateRetryDelays = [1_500, 4_000]
+const updateCheckTimeout = 15_000
+const updateDownloadTimeout = 120_000
 
 const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, milliseconds))
 
@@ -40,21 +43,34 @@ function publishUpdate(patch: Partial<UpdateState>): void {
   updateListeners.forEach((listener) => listener(updateState))
 }
 
-async function checkForUpdates(): Promise<ApiResult<void>> {
+async function replacePendingUpdate(next: Update | null): Promise<void> {
+  const previous = pendingUpdate
+  pendingUpdate = next
+  if (previous && previous !== next) await previous.close().catch(() => undefined)
+}
+
+async function performUpdateCheck(): Promise<ApiResult<void>> {
   try {
     publishUpdate({ phase: "checking", message: "Checking GitHub Releases…", percent: undefined })
-    pendingUpdate = await check()
-    if (!pendingUpdate) {
+    const update = await check({ timeout: updateCheckTimeout })
+    await replacePendingUpdate(update)
+    if (!update) {
       publishUpdate({ phase: "up-to-date", availableVersion: undefined, message: "You are using the latest version." })
       return { ok: true, value: undefined }
     }
-    publishUpdate({ phase: "available", availableVersion: pendingUpdate.version, message: `Version ${pendingUpdate.version} is available.` })
+    publishUpdate({ phase: "available", availableVersion: update.version, message: `Version ${update.version} is available.` })
     return { ok: true, value: undefined }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     publishUpdate({ phase: "error", message })
     return { ok: false, error: message }
   }
+}
+
+function checkForUpdates(): Promise<ApiResult<void>> {
+  if (updateCheck) return updateCheck
+  updateCheck = performUpdateCheck().finally(() => { updateCheck = null })
+  return updateCheck
 }
 
 async function downloadUpdate(): Promise<ApiResult<void>> {
@@ -67,23 +83,23 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
       total = undefined
       publishUpdate({ phase: "downloading", percent: 0, transferred, total, message: attempt === 0 ? "Downloading update… 0%" : `Retrying update download (${attempt + 1}/${updateRetryDelays.length + 1})…` })
       try {
-        await pendingUpdate.downloadAndInstall((event) => {
+        await pendingUpdate.download((event) => {
           if (event.event === "Started") total = event.data.contentLength ?? undefined
           if (event.event === "Progress") transferred += event.data.chunkLength
           const percent = total ? Math.min(100, Math.round((transferred / total) * 100)) : undefined
           publishUpdate({ phase: "downloading", percent, transferred, total, message: percent === undefined ? "Downloading update…" : `Downloading update… ${percent}%` })
-        })
+        }, { timeout: updateDownloadTimeout })
         break
       } catch (error) {
         if (!retryableUpdateDownload(error) || attempt >= updateRetryDelays.length) throw error
         publishUpdate({ phase: "downloading", percent: 0, transferred: 0, total: undefined, message: "GitHub is still preparing the release asset. Retrying automatically…" })
         await wait(updateRetryDelays[attempt])
-        const refreshed = await check()
+        const refreshed = await check({ timeout: updateCheckTimeout })
         if (!refreshed) throw new Error("The update release is no longer available.")
-        pendingUpdate = refreshed
+        await replacePendingUpdate(refreshed)
       }
     }
-    publishUpdate({ phase: "downloaded", percent: 100, transferred, total, message: "Update installed. Restart to use it." })
+    publishUpdate({ phase: "downloaded", percent: 100, transferred, total, message: "Download complete. Restart and install when ready." })
     return { ok: true, value: undefined }
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error)
@@ -140,14 +156,24 @@ const api: AutoPromptApi = {
     let cursor = 0
     let stopped = false
     let polling = false
+    let reportedFailure = false
     const poll = async () => {
       if (stopped || polling) return
       polling = true
       try {
         const result = await sidecar<EventBatch>("events:poll", { after: cursor })
         if (result.ok) {
+          reportedFailure = false
           cursor = result.value.cursor
           result.value.events.forEach(listener)
+        } else if (!reportedFailure) {
+          reportedFailure = true
+          listener({ runId: "runtime", status: "stopped", message: result.error })
+        }
+      } catch (error) {
+        if (!reportedFailure) {
+          reportedFailure = true
+          listener({ runId: "runtime", status: "stopped", message: error instanceof Error ? error.message : String(error) })
         }
       } finally { polling = false }
     }
@@ -162,8 +188,18 @@ const api: AutoPromptApi = {
   checkForUpdates,
   downloadUpdate,
   installUpdate: async () => {
-    try { await relaunch(); return { ok: true, value: undefined } }
-    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+    if (!pendingUpdate) return { ok: false, error: "No downloaded update is ready to install." }
+    try {
+      publishUpdate({ phase: "installing", message: "Installing update…" })
+      await pendingUpdate.install({ restartAfterInstall: true })
+      publishUpdate({ phase: "restarting", message: "Restarting with the new version…" })
+      await relaunch()
+      return { ok: true, value: undefined }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      publishUpdate({ phase: "error", message })
+      return { ok: false, error: message }
+    }
   },
   onUpdateState: (listener) => {
     updateListeners.add(listener)

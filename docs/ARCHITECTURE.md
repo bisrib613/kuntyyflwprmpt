@@ -44,13 +44,13 @@ The Flow asset picker does not expose a stable asset ID on its option button. It
 
 ## Packaging
 
-Tauri supplies the desktop shell and Windows NSIS setup wizard. The package includes a small Node runtime and a pruned `playwright-core` sidecar, but no Chromium, ChromeDriver, Electron, or browser cache. Playwright launches the user's installed Chrome through its supported `chrome` channel.
+Tauri supplies the desktop shell and Windows NSIS setup wizard. The package includes the compiled `playwright-core` sidecar, but no Node runtime, Chromium, ChromeDriver, Electron, or browser cache. The host uses Node.js 20 or newer from the user's `PATH`, and Playwright launches the user's installed Chrome through its supported `chrome` channel.
 
 The release verifier rejects an installer at or above 50 MiB and rejects unsigned updater artifacts. This is a build invariant, not an informal target.
 
 ## Update channel
 
-Tauri Updater reads `latest.json` from GitHub Releases. The user starts the transfer from the Updates menu; the installer is verified against the public key compiled into the app before installation. The private signing key exists only in GitHub Actions secrets.
+Tauri Updater reads `latest.json` from GitHub Releases. Checking is single-flight and time-bounded. Download and installation are separate user actions; the signed installer is verified against the public key compiled into the app before installation. On Windows, installation hands lifecycle control to the updater and restarts the application. The private signing key exists only in GitHub Actions secrets.
 
 GitHub Actions runs on `windows-latest` with Node 24 and stable Rust. A manual patch/minor/major release verifies tests, bumps the JavaScript, Rust, and Tauri manifests, builds signed NSIS artifacts, enforces the size gate, pushes the version commit and tag, then creates the release with the setup executable, signature, and `latest.json`.
 
