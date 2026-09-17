@@ -1,7 +1,11 @@
 node_modules/
 dist/
 dist-electron/
+dist-sidecar/
 release/
+src-tauri/target/
+src-tauri/resources/node.exe
+src-tauri/resources/automation/
 playwright-report/
 test-results/
 .vite/

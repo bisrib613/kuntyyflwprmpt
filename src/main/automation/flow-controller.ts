@@ -15,7 +15,7 @@ export class FlowController {
 
   static async launch(profileDirectory: string): Promise<FlowController> {
     const context = await chromium.launchPersistentContext(profileDirectory, {
-      channel: "msedge",
+      channel: "chrome",
       headless: false,
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },

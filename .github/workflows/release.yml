@@ -8,16 +8,13 @@ on:
         required: true
         default: patch
         type: choice
-        options:
-          - patch
-          - minor
-          - major
+        options: [patch, minor, major]
 
 permissions:
   contents: write
 
 concurrency:
-  group: kuntyyflwprmpt-release
+  group: kuntyy-autoprompt-release
   cancel-in-progress: false
 
 jobs:
@@ -30,48 +27,115 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Use Node.js 24
+      - name: Use Node.js 24.19.0
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.19.0
           cache: npm
+
+      - name: Use stable Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw "Missing GitHub secret: TAURI_SIGNING_PRIVATE_KEY" }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw "Missing GitHub secret: TAURI_SIGNING_PRIVATE_KEY_PASSWORD" }
+
+      - name: Set release version
+        id: version
+        shell: pwsh
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          npm version $env:BUMP --no-git-tag-version
+          $version = node -p "require('./package.json').version"
+
+          $configPath = "src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.version = $version
+          $config | ConvertTo-Json -Depth 100 | Set-Content $configPath -Encoding utf8NoBOM
+
+          $cargoPath = "src-tauri/Cargo.toml"
+          $cargo = Get-Content $cargoPath -Raw
+          $cargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"', "version = `"$version`"", 1)
+          [System.IO.File]::WriteAllText((Resolve-Path $cargoPath), $cargo, (New-Object System.Text.UTF8Encoding($false)))
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Bundle portable Node runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/resources | Out-Null
+          Copy-Item (Get-Command node).Source src-tauri/resources/node.exe -Force
 
       - name: Verify source
         run: |
           npm run typecheck
           npm test
 
-      - name: Bump application version
+      - name: Build signed Tauri installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Enforce installer size and updater signature
+        run: npm run verify:release
+
+      - name: Generate updater manifest
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
+          $signaturePath = "$($installer.FullName).sig"
+          $signature = (Get-Content $signaturePath -Raw).Trim()
+          $assetName = [uri]::EscapeDataString($installer.Name)
+          $manifest = @{
+            version = $env:VERSION
+            notes = "Update details are available inside the application."
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = "https://github.com/bisrib613/kuntyyflwprmpt/releases/download/$env:TAG/$assetName"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content latest.json -Encoding utf8NoBOM
+          "installer=$($installer.FullName)" >> $env:GITHUB_ENV
+          "signature=$signaturePath" >> $env:GITHUB_ENV
+
+      - name: Commit version and tag
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          npm version "${{ inputs.bump }}" -m "release v%s"
+          git add package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "release v${VERSION}"
+          git tag "${TAG}"
+          git push origin HEAD:main "${TAG}"
 
-      - name: Build NSIS installer and update metadata
+      - name: Publish verified GitHub Release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist -- --publish never
-
-      - name: Enforce release size and package contents
-        run: npm run verify:release
-
-      - name: Push version commit and tag
-        shell: bash
-        run: git push origin HEAD:main --follow-tags
-
-      - name: Publish GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          gh release create "v${VERSION}" \
-            release/*.exe \
-            release/*.blockmap \
-            release/latest.yml \
-            --title "v${VERSION}" \
-            --notes "Update details are available inside the application."
+          gh release create $env:TAG $env:installer $env:signature latest.json `
+            --title "Kuntyy AutoPrompt $env:TAG" `
+            --notes "Update details are available inside the application." `
+            --verify-tag
