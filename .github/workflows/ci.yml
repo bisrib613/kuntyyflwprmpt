@@ -64,12 +64,13 @@ jobs:
           $process = Start-Process $app.FullName -PassThru
           Start-Sleep -Seconds 10
           if ($process.HasExited) {
-            Get-ChildItem "$env:LOCALAPPDATA/com.kuntyy.autoprompt/logs" -ErrorAction SilentlyContinue |
+            Get-ChildItem (Join-Path $app.DirectoryName "logs") -ErrorAction SilentlyContinue |
               ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName }
             throw "Installed application exited during the startup smoke test (exit code $($process.ExitCode))."
           }
-          $startupLog = "$env:LOCALAPPDATA/com.kuntyy.autoprompt/logs/startup.log"
+          $startupLog = Join-Path $app.DirectoryName "logs/startup.log"
           if (-not (Test-Path $startupLog)) { throw "Application startup log was not created." }
+          if ($startupLog -notlike "$($app.DirectoryName)*") { throw "Application logs were not written inside the installation directory." }
           $startupOutput = Get-Content $startupLog -Raw
           Write-Host $startupOutput
           if ($startupOutput -notmatch "Automation runtime is ready\.") {

@@ -43,6 +43,10 @@ function publishUpdate(patch: Partial<UpdateState>): void {
   updateListeners.forEach((listener) => listener(updateState))
 }
 
+function recordUpdaterEvent(event: string, message: string): void {
+  void invoke("record_updater_event", { event, message }).catch(() => undefined)
+}
+
 async function replacePendingUpdate(next: Update | null): Promise<void> {
   const previous = pendingUpdate
   pendingUpdate = next
@@ -52,17 +56,21 @@ async function replacePendingUpdate(next: Update | null): Promise<void> {
 async function performUpdateCheck(): Promise<ApiResult<void>> {
   try {
     publishUpdate({ phase: "checking", message: "Checking GitHub Releases…", percent: undefined })
+    recordUpdaterEvent("update.check.start", "Checking GitHub Releases")
     const update = await check({ timeout: updateCheckTimeout })
     await replacePendingUpdate(update)
     if (!update) {
       publishUpdate({ phase: "up-to-date", availableVersion: undefined, message: "You are using the latest version." })
+      recordUpdaterEvent("update.check.complete", "No update available")
       return { ok: true, value: undefined }
     }
     publishUpdate({ phase: "available", availableVersion: update.version, message: `Version ${update.version} is available.` })
+    recordUpdaterEvent("update.check.available", `version=${update.version}`)
     return { ok: true, value: undefined }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     publishUpdate({ phase: "error", message })
+    recordUpdaterEvent("update.check.failed", message)
     return { ok: false, error: message }
   }
 }
@@ -82,6 +90,7 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
       transferred = 0
       total = undefined
       publishUpdate({ phase: "downloading", percent: 0, transferred, total, message: attempt === 0 ? "Downloading update… 0%" : `Retrying update download (${attempt + 1}/${updateRetryDelays.length + 1})…` })
+      recordUpdaterEvent("update.download.start", `attempt=${attempt + 1}`)
       try {
         await pendingUpdate.download((event) => {
           if (event.event === "Started") total = event.data.contentLength ?? undefined
@@ -100,11 +109,13 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
       }
     }
     publishUpdate({ phase: "downloaded", percent: 100, transferred, total, message: "Download complete. Restart and install when ready." })
+    recordUpdaterEvent("update.download.complete", `bytes=${transferred}`)
     return { ok: true, value: undefined }
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error)
     const message = retryableUpdateDownload(error) ? `GitHub did not make the installer available after ${updateRetryDelays.length + 1} attempts. Please try again in a moment. (${raw})` : raw
     publishUpdate({ phase: "error", message })
+    recordUpdaterEvent("update.download.failed", message)
     return { ok: false, error: message }
   }
 }
@@ -128,6 +139,14 @@ const api: AutoPromptApi = {
   },
   pickDownloadDirectory: async () => {
     try { return { ok: true, value: await open({ directory: true, multiple: false }) } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
+  getLogDirectory: async () => {
+    try { return { ok: true, value: await invoke<string>("get_log_directory") } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
+  openLogDirectory: async () => {
+    try { await invoke("open_log_directory"); return { ok: true, value: undefined } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   startRun: async (settings: RunSettings) => {
@@ -191,13 +210,16 @@ const api: AutoPromptApi = {
     if (!pendingUpdate) return { ok: false, error: "No downloaded update is ready to install." }
     try {
       publishUpdate({ phase: "installing", message: "Installing update…" })
+      recordUpdaterEvent("update.install.start", pendingUpdate.version)
       await pendingUpdate.install({ restartAfterInstall: true })
       publishUpdate({ phase: "restarting", message: "Restarting with the new version…" })
+      recordUpdaterEvent("update.install.complete", pendingUpdate.version)
       await relaunch()
       return { ok: true, value: undefined }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       publishUpdate({ phase: "error", message })
+      recordUpdaterEvent("update.install.failed", message)
       return { ok: false, error: message }
     }
   },

@@ -5,6 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Store diagnostic logs in the selected installation folder and open them directly from Settings.",
+  "Rotate startup, automation, updater, and crash diagnostics before individual log files grow beyond 2 MiB.",
+  "Use deterministic updater asset names so GitHub release downloads match latest.json exactly.",
   "Open the authenticated Google Flow application route instead of the public marketing page.",
   "Detect flow.google.com/about redirects as a signed-out FlowPilot session.",
   "Keep the automation sidecar alive when the temporary cookie-export WebView closes.",
@@ -12,7 +15,7 @@ export const NEXT_UPDATE_PATCHES = [
   "Prevent concurrent update checks and surface automation bridge failures without unhandled polling errors.",
   "Enforce unused TypeScript symbol checks in both renderer and automation builds.",
   "Prevent a main-thread deadlock while opening the hidden FlowPilot cookie-export WebView.",
-  "Write persistent automation.log and crash.log files under the application LocalAppData logs folder.",
+  "Write persistent automation.log and crash.log diagnostic files.",
   "Record session export, Chrome launch, navigation, project routing, queue phases, and failures without logging cookies or prompt contents.",
   "Stop waiting after 30 seconds when FlowPilot session preparation does not return.",
   "Start Google Flow sessions automatically when Run queue is pressed; manual Connect is no longer required.",

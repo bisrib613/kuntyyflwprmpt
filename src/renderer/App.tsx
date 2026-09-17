@@ -47,6 +47,7 @@ export function App() {
   const [message, setMessage] = useState("Choose a FlowPilot account and prepare your prompts.")
   const [running, setRunning] = useState(false)
   const [updatesOpen, setUpdatesOpen] = useState(false)
+  const [logDirectory, setLogDirectory] = useState("Loading…")
   const [updateState, setUpdateState] = useState<UpdateState>({ currentVersion: "0.1.0", phase: "idle", message: "Updates are checked automatically." })
 
   useEffect(() => {
@@ -57,6 +58,7 @@ export function App() {
       if (!result.value.length) setMessage("No signed-in Google Flow profiles were found in FlowPilot.")
     })
     void window.autoPrompt.getUpdateState().then(setUpdateState)
+    void window.autoPrompt.getLogDirectory().then((result) => setLogDirectory(result.ok ? result.value : result.error))
     const updateTimer = window.setTimeout(() => { void window.autoPrompt.checkForUpdates() }, 15_000)
     const stopQueueEvents = window.autoPrompt.onQueueEvent((event: QueueEvent) => {
       setMessage(event.message)
@@ -123,6 +125,10 @@ export function App() {
   const updateAction = async (action: "check" | "download" | "install") => {
     const result = action === "check" ? await window.autoPrompt.checkForUpdates() : action === "download" ? await window.autoPrompt.downloadUpdate() : await window.autoPrompt.installUpdate()
     if (!result.ok) setUpdateState((current) => ({ ...current, phase: "error", message: result.error }))
+  }
+  const openLogs = async () => {
+    const result = await window.autoPrompt.openLogDirectory()
+    if (!result.ok) setMessage(result.error)
   }
 
   return <div className="app-shell">
@@ -206,6 +212,7 @@ export function App() {
     {view === "settings" && <main className="content-page settings-page">
       <div className="page-heading"><p className="eyebrow">Settings</p><h2>Application</h2><p>Update and runtime information for this installation.</p></div>
       <section className="settings-card"><div><span>Installed version</span><strong>v{updateState.currentVersion}</strong><p>{updateState.message}</p></div><button className="secondary" onClick={() => setUpdatesOpen(true)}>Open updates</button></section>
+      <section className="settings-card"><div><span>Diagnostic logs</span><strong className="path-value" title={logDirectory}>{logDirectory}</strong><p>Startup, automation, updater, and crash diagnostics are stored beside the installed application.</p></div><button className="secondary" onClick={() => void openLogs()}>Open logs folder</button></section>
       <section className="settings-card"><div><span>Automation browser</span><strong>Local Google Chrome</strong><p>Chrome is opened only when a queue starts and is reused for later runs on the same account.</p></div></section>
       <section className="settings-card"><div><span>Session source</span><strong>FlowPilot</strong><p>Google cookies remain local and are transferred into an isolated temporary Chrome profile.</p></div></section>
     </main>}
