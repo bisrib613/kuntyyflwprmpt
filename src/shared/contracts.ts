@@ -26,22 +26,16 @@ export type PreparedFlowpilotSession = {
   cookies: BrowserCookie[]
 }
 
-export type FlowProject = {
-  id: string
-  name: string
-  href: string
-}
-
 export type AssetInput = {
   id: string
   path: string
   name: string
+  shared?: boolean
 }
 
 export type PromptJob = {
   id: string
   prompt: string
-  useGlobalAssets: boolean
   assets: AssetInput[]
   status: JobStatus
   progress: number
@@ -51,8 +45,7 @@ export type PromptJob = {
 
 export type RunSettings = {
   accountId: string
-  projectMode: "existing" | "new"
-  projectId?: string
+  projectMode: "recent" | "new"
   newProjectName?: string
   output: OutputKind
   model: string
@@ -61,7 +54,6 @@ export type RunSettings = {
   quality: DownloadQuality
   autoDownload: boolean
   downloadDirectory: string
-  globalAssets: AssetInput[]
   jobs: PromptJob[]
 }
 
@@ -90,7 +82,6 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string }
 
 export type AutoPromptApi = {
   listAccounts(): Promise<ApiResult<FlowpilotAccount[]>>
-  connect(accountId: string): Promise<ApiResult<FlowProject[]>>
   pickAssets(): Promise<ApiResult<AssetInput[]>>
   pickPromptFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   pickDownloadDirectory(): Promise<ApiResult<string | null>>

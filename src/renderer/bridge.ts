@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
-import type { ApiResult, AssetInput, AutoPromptApi, FlowProject, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
+import type { ApiResult, AssetInput, AutoPromptApi, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
@@ -83,14 +83,6 @@ async function downloadUpdate(): Promise<ApiResult<void>> {
 
 const api: AutoPromptApi = {
   listAccounts: () => sidecar<FlowpilotAccount[]>("accounts:list"),
-  connect: async (accountId) => {
-    try {
-      const session = await invoke<PreparedFlowpilotSession>("prepare_flowpilot_session", { accountId })
-      return sidecar<FlowProject[]>("flow:connect", { accountId, ...session })
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  },
   pickAssets: async () => {
     try {
       const selected = await open({ multiple: true, filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "mp4", "mov"] }] })
@@ -110,7 +102,20 @@ const api: AutoPromptApi = {
     try { return { ok: true, value: await open({ directory: true, multiple: false }) } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
-  startRun: (settings: RunSettings) => sidecar<{ runId: string }>("queue:start", { settings }),
+  startRun: async (settings: RunSettings) => {
+    try {
+      const status = await sidecar<boolean>("session:status", { accountId: settings.accountId })
+      if (!status.ok) return status
+      if (!status.value) {
+        const session = await invoke<PreparedFlowpilotSession>("prepare_flowpilot_session", { accountId: settings.accountId })
+        const opened = await sidecar<null>("session:open", { accountId: settings.accountId, ...session })
+        if (!opened.ok) return opened
+      }
+      return sidecar<{ runId: string }>("queue:start", { settings })
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   stopRun: async () => {
     const result = await sidecar<null>("queue:stop")
     return result.ok ? { ok: true, value: undefined } : result

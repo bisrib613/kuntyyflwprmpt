@@ -1,16 +1,18 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core"
-import type { AssetInput, BrowserCookie, FlowProject, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
+import type { AssetInput, BrowserCookie, OutputKind, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
 import { flowSelectors } from "./selectors.js"
 
 type OutputCard = { locator: Locator; index: number }
+type ActiveProject = { id: string; name: string }
 
 const sanitize = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").replace(/[. ]+$/g, "").slice(0, 120) || "output"
 
 export class FlowController {
   private readonly assetRefs = new Map<string, string>()
+  private activeProjectId: string | null = null
   private constructor(private readonly context: BrowserContext, private readonly page: Page) {}
 
   static async launch(profileDirectory: string, cookies: BrowserCookie[]): Promise<FlowController> {
@@ -27,23 +29,22 @@ export class FlowController {
 
   async close(): Promise<void> { await this.context.close() }
 
-  async listProjects(): Promise<FlowProject[]> {
+  private async openFlowHome(): Promise<void> {
     await this.page.goto("https://flow.google.com/", { waitUntil: "domcontentloaded" })
     if (this.page.url().includes("accounts.google.com")) throw new Error("The selected FlowPilot session is signed out. Open this account in FlowPilot and sign in first.")
-    await this.page.locator('a[aria-label="Open project"]').first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => undefined)
-    return this.page.locator('a[aria-label="Open project"]').evaluateAll((anchors) => anchors.map((anchor) => {
-      const href = anchor.getAttribute("href") || ""
-      const match = href.match(/\/project\/([^/?#]+)/)
-      const container = anchor.parentElement
-      const name = (container?.textContent || "Untitled project").replace(/edit|delete/gi, " ").replace(/\s+/g, " ").trim()
-      return { id: match?.[1] || href, href, name }
-    }).filter((project) => Boolean(project.id)))
   }
 
-  async openProject(settings: RunSettings): Promise<FlowProject> {
+  private useProject(id: string): void {
+    if (this.activeProjectId !== id) this.assetRefs.clear()
+    this.activeProjectId = id
+  }
+
+  async openProject(settings: RunSettings): Promise<ActiveProject> {
+    await this.openFlowHome()
     if (settings.projectMode === "new") {
-      await this.page.goto("https://flow.google.com/", { waitUntil: "domcontentloaded" })
-      await this.page.getByRole("button", { name: /New project/i }).click()
+      const create = this.page.getByRole("button", { name: /New project/i })
+      await create.waitFor({ state: "visible", timeout: 20_000 })
+      await create.click()
       await this.page.waitForURL(/\/project\/[^/?#]+/, { timeout: 20_000 })
       const id = this.page.url().match(/\/project\/([^/?#]+)/)?.[1]
       if (!id) throw new Error("Flow created a project but its project id could not be read.")
@@ -52,15 +53,22 @@ export class FlowController {
         const title = this.page.getByLabel("Editable text").first()
         if (await title.isVisible()) { await title.fill(name); await title.press("Enter") }
       }
-      return { id, href: `/project/${id}`, name: name || "New project" }
+      this.useProject(id)
+      return { id, name: name || "New project" }
     }
 
-    if (!settings.projectId) throw new Error("Select an existing project.")
-    const projects = await this.listProjects()
-    const project = projects.find((candidate) => candidate.id === settings.projectId)
-    if (!project) throw new Error("The selected project no longer exists. Select another project before running.")
-    await this.page.goto(new URL(project.href, "https://flow.google.com").toString(), { waitUntil: "domcontentloaded" })
-    return project
+    const recent = this.page.locator(flowSelectors.recentProject).filter({ visible: true }).first()
+    await recent.waitFor({ state: "visible", timeout: 20_000 }).catch(() => {
+      throw new Error("No recent Google Flow project is available. Choose Create project for the first run.")
+    })
+    const href = await recent.getAttribute("href")
+    const id = href?.match(/\/project\/([^/?#]+)/)?.[1]
+    if (!href || !id) throw new Error("Google Flow exposed a recent project without a valid project link.")
+    const name = ((await recent.locator("xpath=..").textContent()) || "Recent project").replace(/edit|delete/gi, " ").replace(/\s+/g, " ").trim()
+    await recent.click()
+    await this.page.waitForURL(new RegExp(`/project/${id}(?:[/?#]|$)`), { timeout: 20_000 })
+    this.useProject(id)
+    return { id, name: name || "Recent project" }
   }
 
   async configure(settings: RunSettings): Promise<void> {
@@ -77,10 +85,11 @@ export class FlowController {
     await this.page.locator(flowSelectors.settings).press("Escape")
   }
 
-  async submitJob(job: PromptJob, globalAssets: AssetInput[]): Promise<Set<string>> {
+  async submitJob(job: PromptJob, sharedAssets: AssetInput[]): Promise<Set<string>> {
     const before = new Set(await this.cardKeys())
-    if ((job.useGlobalAssets && globalAssets.length) || job.assets.length) {
-      await this.attachAssets(job.useGlobalAssets ? globalAssets : [], job.assets)
+    const assets = [...sharedAssets, ...job.assets.filter((asset) => !asset.shared)]
+    if (assets.length) {
+      await this.attachAssets(assets)
     }
     const prompt = this.page.locator(flowSelectors.prompt).last()
     await prompt.fill(job.prompt)
@@ -88,7 +97,7 @@ export class FlowController {
     return before
   }
 
-  async prepareGlobalAssets(assets: AssetInput[]): Promise<void> {
+  async prepareAssets(assets: AssetInput[]): Promise<void> {
     const missing = assets.filter((asset) => !this.assetRefs.has(asset.id))
     if (!missing.length) return
     await this.page.locator(flowSelectors.assetPicker).click()
@@ -99,19 +108,24 @@ export class FlowController {
     await this.page.locator(flowSelectors.assetPicker).click()
   }
 
-  private async attachAssets(globalAssets: AssetInput[], localAssets: AssetInput[]): Promise<void> {
+  private async attachAssets(assets: AssetInput[]): Promise<void> {
     await this.page.locator(flowSelectors.assetPicker).click()
-    for (const asset of globalAssets) {
-      const identity = this.assetRefs.get(asset.id)
-      if (!identity) throw new Error(`Global asset ${asset.name} was not registered in the Flow project.`)
-      const option = await this.findAssetOption(identity)
-      if (!option) throw new Error(`Global asset ${asset.name} is no longer available in the Flow asset picker.`)
-      if ((await option.getAttribute("aria-selected")) !== "true") await option.click()
+    const wanted = new Set(assets.map((asset) => this.assetRefs.get(asset.id)).filter((identity): identity is string => Boolean(identity)))
+    const options = this.page.getByRole("option")
+    for (let index = 0; index < await options.count(); index += 1) {
+      const option = options.nth(index)
+      if ((await option.getAttribute("aria-selected")) !== "true") continue
+      const image = option.locator("img.asset-thumbnail-image")
+      if (!await image.count()) continue
+      const source = await image.evaluate((element) => (element as HTMLImageElement).currentSrc || (element as HTMLImageElement).src)
+      if (!wanted.has(this.assetIdentity(source))) await option.click()
     }
-    for (const asset of localAssets) {
-      const identity = await this.uploadOneAsset(asset)
+    for (const asset of assets) {
+      const identity = this.assetRefs.get(asset.id)
+      if (!identity) throw new Error(`Asset ${asset.name} was not registered in the Flow project.`)
       const option = await this.findAssetOption(identity)
-      if (option && (await option.getAttribute("aria-selected")) !== "true") await option.click()
+      if (!option) throw new Error(`Asset ${asset.name} is no longer available in the Flow asset picker.`)
+      if ((await option.getAttribute("aria-selected")) !== "true") await option.click()
     }
     const add = this.page.getByRole("button", { name: /Add to prompt/i })
     await add.waitFor({ state: "visible", timeout: 30_000 })
@@ -198,9 +212,9 @@ export class FlowController {
     throw new Error(`Timed out waiting for ${expected} completed Flow output(s).`)
   }
 
-  async downloadCard(card: OutputCard, settings: RunSettings, jobIndex: number): Promise<string> {
+  async downloadCard(card: OutputCard, settings: RunSettings, jobIndex: number, promptIndex: number): Promise<string> {
     await mkdir(settings.downloadDirectory, { recursive: true })
-    const base = sanitize(`job-${String(jobIndex + 1).padStart(3, "0")}-variant-${card.index + 1}`)
+    const base = sanitize(`job-${String(jobIndex + 1).padStart(3, "0")}-prompt-${String(promptIndex + 1).padStart(3, "0")}-variant-${card.index + 1}`)
     if (settings.output === "image" && settings.quality === "original-1k") {
       return this.downloadOriginalImage(card.locator, settings.downloadDirectory, base)
     }

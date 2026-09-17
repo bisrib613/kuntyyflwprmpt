@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { rm } from "node:fs/promises"
 import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
+import { parsePromptText } from "../../shared/prompt-file.js"
 import { FlowController } from "./flow-controller.js"
 
 export class QueueRunner {
@@ -35,28 +36,40 @@ export class QueueRunner {
       this.emit({ runId: this.runId, status: "ready", message: `Connected to ${this.account.name}.` })
       const project = await controller.openProject(settings)
       await controller.configure(settings)
-      await controller.prepareGlobalAssets(settings.globalAssets)
+      const allAssets = settings.jobs.flatMap((job) => job.assets)
+      const uniqueAssets = [...new Map(allAssets.map((asset) => [asset.id, asset])).values()]
+      const sharedAssets = uniqueAssets.filter((asset) => asset.shared)
+      await controller.prepareAssets(uniqueAssets)
       this.emit({ runId: this.runId, status: "ready", message: `Using project ${project.name}.` })
 
       for (let index = 0; index < settings.jobs.length; index += 1) {
         const job = settings.jobs[index]
+        const prompts = parsePromptText(job.prompt)
         if (this.cancelled) break
-        this.emit({ runId: this.runId, jobId: job.id, status: "submitting", progress: 5, message: "Submitting prompt." })
         try {
-          const previousKeys = await controller.submitJob(job, settings.globalAssets)
-          this.emit({ runId: this.runId, jobId: job.id, status: "generating", progress: 20, message: `Waiting for ${settings.variants} variant(s).` })
           const downloads: string[] = []
-          const downloadTasks: Array<Promise<void>> = []
-          const slots: Array<Promise<void>> = [Promise.resolve(), Promise.resolve()]
-          await controller.watchNewCards(previousKeys, settings.variants, (card) => {
-            if (!settings.autoDownload || this.cancelled) return
-            this.emit({ runId: this.runId, jobId: job.id, status: "downloading", progress: 40 + Math.round((card.index / settings.variants) * 50), message: `Variant ${card.index + 1} is ready; downloading now.` })
-            const slot = card.index % slots.length
-            const task = slots[slot].then(async () => { downloads.push(await controller.downloadCard(card, settings, index)) })
-            slots[slot] = task
-            downloadTasks.push(task)
-          })
-          await Promise.all(downloadTasks)
+          for (let promptIndex = 0; promptIndex < prompts.length; promptIndex += 1) {
+            if (this.cancelled) break
+            const promptNumber = promptIndex + 1
+            const baseProgress = Math.round((promptIndex / prompts.length) * 100)
+            this.emit({ runId: this.runId, jobId: job.id, status: "submitting", progress: baseProgress, message: `Submitting prompt ${promptNumber}/${prompts.length}.` })
+            const runtimeJob = { ...job, prompt: prompts[promptIndex] }
+            const previousKeys = await controller.submitJob(runtimeJob, sharedAssets)
+            this.emit({ runId: this.runId, jobId: job.id, status: "generating", progress: baseProgress + Math.round(20 / prompts.length), message: `Prompt ${promptNumber}/${prompts.length}: waiting for ${settings.variants} variant(s).` })
+            const downloadTasks: Array<Promise<void>> = []
+            const slots: Array<Promise<void>> = [Promise.resolve(), Promise.resolve()]
+            await controller.watchNewCards(previousKeys, settings.variants, (card) => {
+              if (!settings.autoDownload || this.cancelled) return
+              const withinPrompt = 40 + Math.round((card.index / settings.variants) * 50)
+              const combinedProgress = Math.min(99, Math.round(((promptIndex * 100) + withinPrompt) / prompts.length))
+              this.emit({ runId: this.runId, jobId: job.id, status: "downloading", progress: combinedProgress, message: `Prompt ${promptNumber}/${prompts.length}, variant ${card.index + 1}: downloading.` })
+              const slot = card.index % slots.length
+              const task = slots[slot].then(async () => { downloads.push(await controller.downloadCard(card, settings, index, promptIndex)) })
+              slots[slot] = task
+              downloadTasks.push(task)
+            })
+            await Promise.all(downloadTasks)
+          }
           this.emit({ runId: this.runId, jobId: job.id, status: "completed", progress: 100, downloads, message: "Job completed." })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
