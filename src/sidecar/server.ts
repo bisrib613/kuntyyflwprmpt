@@ -4,10 +4,16 @@ import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contra
 import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
+import type { ApiVaultRequest } from "../shared/api-vault.js"
+import { listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import type { ApiProvider } from "../shared/api-vault.js"
 
 const tokenIndex = process.argv.indexOf("--token")
 const token = tokenIndex >= 0 ? process.argv[tokenIndex + 1] : ""
 if (!token || token.length < 32) throw new Error("A strong sidecar authentication token is required.")
+const installDirectoryIndex = process.argv.indexOf("--install-dir")
+const installDirectory = installDirectoryIndex >= 0 ? process.argv[installDirectoryIndex + 1] : ""
+if (!installDirectory) throw new Error("The application installation directory is required.")
 
 let accounts: FlowpilotAccount[] = []
 let runner: QueueRunner | null = null
@@ -82,6 +88,26 @@ async function request(method: string, params: unknown): Promise<unknown> {
     case "events:poll": {
       const after = typeof input.after === "number" && Number.isSafeInteger(input.after) ? input.after : 0
       return { cursor: eventCursor, events: events.filter((entry) => entry.cursor > after).map((entry) => entry.event) }
+    }
+    case "api-vault:run": {
+      const settings = input.request as ApiVaultRequest | undefined
+      if (!settings || typeof settings !== "object") throw new Error("API Vault request is required.")
+      logAutomation("api-vault.run.start", { provider: settings.provider, model: settings.model, mode: settings.executionMode })
+      try {
+        const result = await runApiVault(installDirectory, settings)
+        logAutomation("api-vault.run.complete", { provider: settings.provider, model: result.model, files: result.files.length })
+        return result
+      } catch (error) {
+        logAutomation("api-vault.run.failed", { provider: settings.provider, message: error instanceof Error ? error.message : String(error) })
+        throw error
+      }
+    }
+    case "api-vault:models": {
+      const provider = input.provider as ApiProvider
+      const endpoint = typeof input.endpoint === "string" ? input.endpoint : ""
+      const apiKey = typeof input.apiKey === "string" ? input.apiKey : ""
+      if (!["gemini", "openai", "9router", "custom"].includes(provider) || !endpoint) throw new Error("Provider and endpoint are required to list models.")
+      return listApiVaultModels(provider, endpoint, apiKey)
     }
     default:
       throw new Error(`Unsupported sidecar method: ${method}`)

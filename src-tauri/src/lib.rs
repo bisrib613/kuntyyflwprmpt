@@ -63,6 +63,20 @@ fn install_log_directory_for_executable(executable: &std::path::Path) -> Result<
         .ok_or_else(|| "Application installation directory is unavailable.".to_string())
 }
 
+fn install_directory() -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        return std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| "Project root is unavailable.".to_string());
+    }
+    std::env::current_exe()
+        .map_err(|error| format!("Unable to locate the application executable: {error}"))?
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "Application installation directory is unavailable.".to_string())
+}
+
 fn log_directory() -> Result<PathBuf, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("Unable to locate the application executable: {error}"))?;
@@ -256,9 +270,10 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
     }
     let token = uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
     let log_directory_arg = command_path(log_directory()?);
+    let install_directory_arg = command_path(install_directory()?);
     let mut command = Command::new(&node);
     command
-        .args([&script, "--token", &token, "--log-dir", &log_directory_arg])
+        .args([&script, "--token", &token, "--log-dir", &log_directory_arg, "--install-dir", &install_directory_arg])
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
     if cfg!(debug_assertions) {
@@ -421,8 +436,9 @@ async fn sidecar_request(app: tauri::AppHandle, state: tauri::State<'_, Automati
 #[tauri::command]
 fn read_prompt_file(path: String) -> Result<String, String> {
     let file = std::path::Path::new(&path);
-    if file.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("txt")) != Some(true) {
-        return Err("Only .txt prompt files are supported.".to_string());
+    let extension = file.extension().and_then(|value| value.to_str()).unwrap_or_default();
+    if !["txt", "md", "markdown"].iter().any(|value| extension.eq_ignore_ascii_case(value)) {
+        return Err("Only TXT and Markdown prompt files are supported.".to_string());
     }
     let metadata = std::fs::metadata(file).map_err(|error| error.to_string())?;
     if metadata.len() > 5 * 1024 * 1024 { return Err("Prompt file exceeds 5 MiB.".to_string()); }

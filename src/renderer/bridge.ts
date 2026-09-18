@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import type { ApiResult, AssetInput, AutoPromptApi, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
+import type { ApiVaultAsset } from "../shared/api-vault"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
@@ -141,6 +142,28 @@ const api: AutoPromptApi = {
     try { return { ok: true, value: await open({ directory: true, multiple: false }) } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
+  pickApiVaultAssets: async () => {
+    try {
+      const selected = await open({ multiple: true, filters: [{ name: "Images and documents", extensions: ["png", "jpg", "jpeg", "webp", "gif", "txt", "md", "markdown", "json", "csv", "tsv", "pdf", "docx"] }] })
+      const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : []
+      const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "gif"])
+      return { ok: true, value: paths.map((filePath): ApiVaultAsset => {
+        const name = filePath.split(/[\\/]/).pop() || filePath
+        const extension = name.split(".").pop()?.toLowerCase() || ""
+        return { id: crypto.randomUUID(), path: filePath, name, kind: imageExtensions.has(extension) ? "image" : "document" }
+      }) }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
+  pickApiVaultTextFile: async () => {
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: "Prompt text", extensions: ["txt", "md", "markdown"] }] })
+      if (!selected) return { ok: true, value: null }
+      const text = await invoke<string>("read_prompt_file", { path: selected })
+      return { ok: true, value: { name: selected.split(/[\\/]/).pop() || selected, text } }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
+  runApiVault: (request) => sidecar("api-vault:run", { request }),
+  listApiVaultModels: (provider, endpoint, apiKey) => sidecar("api-vault:models", { provider, endpoint, apiKey }),
   getLogDirectory: async () => {
     try { return { ok: true, value: await invoke<string>("get_log_directory") } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }

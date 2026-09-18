@@ -3,12 +3,13 @@ import "./bridge"
 import type { AssetInput, DownloadQuality, FlowpilotAccount, OutputKind, PromptJob, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
 import { NEXT_UPDATE_PATCHES, PATCH_LOG } from "../shared/patch-log"
 import { parsePromptFile, parsePromptText } from "../shared/prompt-file"
+import { ApiVaultView } from "./ApiVaultView"
 
 const IMAGE_MODELS = ["Nano Banana 2 Lite", "Nano Banana 2", "Nano Banana Pro"]
 const VIDEO_MODELS = ["Omni 1.1 Flash", "Veo 3.1 Lite", "Veo 3.1 Fast", "Veo 3.1 Quality"]
 const IMAGE_QUALITIES: Array<[DownloadQuality, string]> = [["original-1k", "Original 1K"], ["upscale-2k", "2K Upscaled"], ["upscale-4k", "4K · fallback 2K"]]
 const VIDEO_QUALITIES: Array<[DownloadQuality, string]> = [["original-720p", "Original 720p"], ["upscale-1080p", "1080p · fallback 720p"], ["upscale-4k", "4K · fallback 1080p / 720p"], ["gif-270p", "Animated GIF 270p"]]
-type AppView = "flow" | "docs" | "settings"
+type AppView = "flow" | "vault" | "docs" | "settings"
 
 function createJob(prompt = ""): PromptJob {
   return { id: crypto.randomUUID(), prompt, assets: [], status: "draft", progress: 0, downloads: [] }
@@ -137,6 +138,7 @@ export function App() {
       <div className="brand-copy"><h1>Kuntyy AutoPrompt</h1><p>Google Flow automation</p></div>
       <nav className="app-tabs" aria-label="Application sections">
         <button className={view === "flow" ? "active" : ""} onClick={() => setView("flow")}>Google Flow</button>
+        <button className={view === "vault" ? "active" : ""} onClick={() => setView("vault")}>API Vault</button>
         <button className={view === "docs" ? "active" : ""} onClick={() => setView("docs")}>Docs</button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>Settings</button>
       </nav>
@@ -197,8 +199,10 @@ export function App() {
       </aside>
     </main>}
 
+    {view === "vault" && <ApiVaultView />}
+
     {view === "docs" && <main className="content-page">
-      <div className="page-heading"><p className="eyebrow">Docs</p><h2>Google Flow workflow</h2><p>Everything needed to prepare a queue without repeating setup.</p></div>
+      <div className="page-heading"><p className="eyebrow">Docs</p><h2>Automation workflows</h2><p>Quick guidance for Google Flow queues and direct API runs.</p></div>
       <div className="docs-grid">
         <article><span>01</span><h3>Run without connecting first</h3><p>Select a FlowPilot account and press Run queue. Kuntyy AutoPrompt reads the signed-in session and opens Chrome automatically.</p></article>
         <article><span>02</span><h3>Choose the project route</h3><p>Recent project opens the first project in Google Flow's recent list. Create project uses the native New project action.</p></article>
@@ -206,6 +210,8 @@ export function App() {
         <article><span>04</span><h3>Hybrid assets</h3><p>Add another job when its local assets differ. With multiple jobs visible, mark an asset All jobs to reuse it without selecting or uploading it again.</p></article>
         <article><span>05</span><h3>TXT files</h3><p>TXT import accepts <code>---</code> separators. Blank-line-separated legacy files are normalized into one job group automatically.</p></article>
         <article><span>06</span><h3>Downloads</h3><p>Choose a folder before running. Each variant downloads as soon as it becomes ready; jobs do not wait for every variant to finish together.</p></article>
+        <article><span>07</span><h3>API Vault inputs</h3><p>System instruction, user prompt, images, and documents remain separate. Documents are parsed locally; images use native multimodal input.</p></article>
+        <article><span>08</span><h3>Agent files</h3><p>Relative paths stay inside <code>.agents</code> beside the installed app. External writes require an absolute path stated directly in your prompt.</p></article>
       </div>
     </main>}
 

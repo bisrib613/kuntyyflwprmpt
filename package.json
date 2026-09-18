@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "npm run build:sidecar && vite",
     "build": "npm run build:sidecar && tsc --noEmit && vite build && npm run prepare:sidecar",
-    "build:sidecar": "tsc -p tsconfig.sidecar.json",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
     "test": "vitest run --root .",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.sidecar.json --noEmit",
     "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
@@ -21,14 +21,18 @@
     "@tauri-apps/plugin-dialog": "2.7.3",
     "@tauri-apps/plugin-process": "2.3.1",
     "@tauri-apps/plugin-updater": "2.11.0",
+    "mammoth": "1.10.0",
+    "pdf-parse": "1.1.1",
     "playwright-core": "1.63.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "esbuild": "0.28.2",
     "@types/node": "24.13.5",
+    "@types/pdf-parse": "1.1.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "@tauri-apps/cli": "2.11.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "typescript": "7.0.2",
