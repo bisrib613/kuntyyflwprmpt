@@ -18,4 +18,4 @@ await cp(playwright, path.join(destination, "node_modules", "playwright-core"), 
 })
 await writeFile(path.join(destination, "package.json"), `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`)
 
-console.log(`Prepared Chrome-only Playwright sidecar at ${path.relative(project, destination)}.`)
+console.log(`Prepared CDP-only Playwright sidecar at ${path.relative(project, destination)}.`)

@@ -11,19 +11,8 @@ export type FlowpilotAccount = {
   email: string | null
 }
 
-export type BrowserCookie = {
-  name: string
-  value: string
-  domain: string
-  path: string
-  secure: boolean
-  httpOnly: boolean
-  sameSite?: "Strict" | "Lax" | "None"
-}
-
 export type PreparedFlowpilotSession = {
-  profilePath: string
-  cookies: BrowserCookie[]
+  cdpEndpoint: string
 }
 
 export type AssetInput = {

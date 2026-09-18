@@ -9,7 +9,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
-use tauri::WebviewUrl;
 
 const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -31,31 +30,30 @@ struct ReadyMessage {
     port: u16,
 }
 
-#[derive(Deserialize)]
-struct StoredFlowpilotAccount {
-    id: String,
-    #[serde(default)]
-    service: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserCookie {
-    name: String,
-    value: String,
-    domain: String,
-    path: String,
-    secure: bool,
-    http_only: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    same_site: Option<String>,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreparedFlowpilotSession {
-    profile_path: String,
-    cookies: Vec<BrowserCookie>,
+    cdp_endpoint: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlowpilotBridgeDescriptor {
+    endpoint: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlowpilotSessionValue {
+    cdp_endpoint: String,
+}
+
+#[derive(Deserialize)]
+struct FlowpilotBridgeResponse {
+    ok: bool,
+    value: Option<FlowpilotSessionValue>,
+    error: Option<String>,
 }
 
 fn install_log_directory_for_executable(executable: &std::path::Path) -> Result<PathBuf, String> {
@@ -163,199 +161,14 @@ fn should_stop_sidecar(window_label: &str, destroyed: bool) -> bool {
     destroyed && window_label == "main"
 }
 
-const SESSION_PROFILE_FILES: &[&[&str]] = &[
-    &["Local State"],
-    &["First Run"],
-    &["Default", "Preferences"],
-    &["Default", "Secure Preferences"],
-    &["Default", "Network", "Network Persistent State"],
-    &["Default", "Network", "Cookies"],
-    &["Default", "Network", "Cookies-journal"],
-    &["Default", "Network", "Cookies-wal"],
-    &["Default", "Network", "Cookies-shm"],
-    &["Default", "Cookies"],
-    &["Default", "Cookies-journal"],
-    &["Default", "Cookies-wal"],
-    &["Default", "Cookies-shm"],
-    &["EBWebView", "Local State"],
-    &["EBWebView", "First Run"],
-    &["EBWebView", "Default", "Preferences"],
-    &["EBWebView", "Default", "Secure Preferences"],
-    &["EBWebView", "Default", "Network", "Network Persistent State"],
-    &["EBWebView", "Default", "Network", "Cookies"],
-    &["EBWebView", "Default", "Network", "Cookies-journal"],
-    &["EBWebView", "Default", "Network", "Cookies-wal"],
-    &["EBWebView", "Default", "Network", "Cookies-shm"],
-    &["EBWebView", "Default", "Cookies"],
-    &["EBWebView", "Default", "Cookies-journal"],
-    &["EBWebView", "Default", "Cookies-wal"],
-    &["EBWebView", "Default", "Cookies-shm"],
-];
-
-fn session_relative_path(parts: &[&str]) -> PathBuf {
-    let mut path = PathBuf::new();
-    for part in parts {
-        path.push(part);
-    }
-    path
-}
-
-fn copy_session_profile(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
-    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
-    let mut copied_cookie_store = false;
-    for parts in SESSION_PROFILE_FILES {
-        let relative = session_relative_path(parts);
-        let source_path = source.join(&relative);
-        if !source_path.is_file() {
-            continue;
-        }
-        let destination_path = destination.join(&relative);
-        if let Some(parent) = destination_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::copy(&source_path, &destination_path).map_err(|error| {
-            format!("Unable to copy {}: {error}", source_path.display())
-        })?;
-        if parts.last() == Some(&"Cookies") {
-            copied_cookie_store = true;
-        }
-    }
-    if !copied_cookie_store {
-        let _ = fs::remove_dir_all(destination);
-        return Err("FlowPilot's WebView2 cookie store was not found.".to_string());
-    }
-    Ok(())
-}
-
-fn google_cookie_domain(domain: &str) -> bool {
-    let domain = domain.trim_start_matches('.').to_ascii_lowercase();
-    domain == "google.com"
-        || domain.ends_with(".google.com")
-        || domain == "labs.google"
-        || domain.ends_with(".labs.google")
-        || domain == "googleusercontent.com"
-        || domain.ends_with(".googleusercontent.com")
-}
-
-fn prepare_flowpilot_session_inner(
-    app: tauri::AppHandle,
-    account_id: String,
-) -> Result<PreparedFlowpilotSession, String> {
-    if !valid_account_id(&account_id) {
-        return Err("Invalid FlowPilot account id.".to_string());
-    }
-    let account_log = safe_log_value(&account_id);
-    append_automation_log(&app, "session.prepare.validate", &format!("accountId={account_log}"));
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or_else(|| "LOCALAPPDATA is unavailable; FlowPilot profiles cannot be located.".to_string())?;
-    let flowpilot_root = local_app_data.join("com.flowpilot.desktop");
-    let accounts_path = flowpilot_root.join("accounts.json");
-    let accounts: Vec<StoredFlowpilotAccount> = serde_json::from_slice(
-        &fs::read(&accounts_path).map_err(|error| format!("Unable to read {}: {error}", accounts_path.display()))?,
-    )
-    .map_err(|error| format!("Invalid FlowPilot accounts.json: {error}"))?;
-    if !accounts.iter().any(|account| {
-        account.id == account_id && account.service.as_deref().unwrap_or("flow") == "flow"
-    }) {
-        return Err("The selected FlowPilot account no longer exists.".to_string());
-    }
-
-    let source = flowpilot_root
-        .join("webview-profiles")
-        .join(format!("flow-{account_id}"));
-    if !source.is_dir() {
-        return Err("The selected FlowPilot session profile does not exist.".to_string());
-    }
-    append_automation_log(&app, "session.snapshot.copy.start", &format!("accountId={account_log}"));
-    let session_root = std::env::temp_dir().join("kuntyy-autoprompt-sessions");
-    let snapshot = session_root
-        .join(format!("flow-{account_id}-{}", uuid::Uuid::new_v4().simple()));
-    copy_session_profile(&source, &snapshot).map_err(|error| {
-        format!("FlowPilot session snapshot failed. Close the active Flow profile and retry. {error}")
-    })?;
-    append_automation_log(&app, "session.snapshot.copy.complete", &format!("accountId={account_log}"));
-
-    let label = format!("flowpilot-session-export-{}", uuid::Uuid::new_v4().simple());
-    let app_for_webview = app.clone();
-    let snapshot_for_webview = snapshot.clone();
-    let label_for_webview = label.clone();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    append_automation_log(&app, "session.webview.create.start", &format!("accountId={account_log}"));
-    let open_result = app.run_on_main_thread(move || {
-        let result = tauri::WebviewWindowBuilder::new(
-            &app_for_webview,
-            label_for_webview,
-            WebviewUrl::External("about:blank".parse().expect("about:blank is a valid URL")),
-        )
-        .data_directory(snapshot_for_webview)
-        .visible(false)
-        .focused(false)
-        .inner_size(1.0, 1.0)
-        .position(-10_000.0, -10_000.0)
-        .build()
-        .map_err(|error| error.to_string());
-        let _ = sender.send(result);
-    });
-    if let Err(error) = open_result {
-        let _ = fs::remove_dir_all(&snapshot);
-        return Err(error.to_string());
-    }
-    let webview = match receiver
-        .recv_timeout(Duration::from_secs(15))
-        .map_err(|_| "Timed out while opening the FlowPilot session snapshot.".to_string())
-        .and_then(|result| result)
-    {
-        Ok(webview) => webview,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&snapshot);
-            return Err(error);
-        }
-    };
-    append_automation_log(&app, "session.webview.create.complete", &format!("accountId={account_log}"));
-    append_automation_log(&app, "session.cookies.read.start", &format!("accountId={account_log}"));
-    let result = webview.cookies().map_err(|error| error.to_string()).map(|cookies| {
-        cookies
-            .into_iter()
-            .filter_map(|cookie| {
-                let domain = cookie.domain()?.to_string();
-                if !google_cookie_domain(&domain) {
-                    return None;
-                }
-                let same_site = cookie.same_site().map(|value| match value {
-                    tauri::webview::cookie::SameSite::Strict => "Strict",
-                    tauri::webview::cookie::SameSite::Lax => "Lax",
-                    tauri::webview::cookie::SameSite::None => "None",
-                });
-                Some(BrowserCookie {
-                    name: cookie.name().to_string(),
-                    value: cookie.value().to_string(),
-                    domain,
-                    path: cookie.path().unwrap_or("/").to_string(),
-                    secure: cookie.secure().unwrap_or(false),
-                    http_only: cookie.http_only().unwrap_or(false),
-                    same_site: same_site.map(str::to_string),
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    let _ = webview.close();
-    let _ = fs::remove_dir_all(&snapshot);
-    let cookies = result?;
-    append_automation_log(&app, "session.cookies.read.complete", &format!("accountId={account_log} count={}", cookies.len()));
-    if cookies.is_empty() {
-        return Err("No signed-in Google cookies were found in the selected FlowPilot session.".to_string());
-    }
-    let profile = session_root.join(format!(
-        "chrome-{account_id}-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    fs::create_dir_all(&profile)
-        .map_err(|error| format!("Unable to create the temporary automation profile: {error}"))?;
-    append_automation_log(&app, "session.chrome_profile.ready", &format!("accountId={account_log} profile={}", profile.file_name().and_then(|value| value.to_str()).unwrap_or("unknown")));
-    Ok(PreparedFlowpilotSession {
-        profile_path: command_path(profile),
-        cookies,
+fn valid_flowpilot_endpoint(value: &str) -> bool {
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port().is_some()
+            && (url.path().is_empty() || url.path() == "/")
+            && url.query().is_none()
+            && url.fragment().is_none()
     })
 }
 
@@ -365,15 +178,55 @@ async fn prepare_flowpilot_session(
     account_id: String,
 ) -> Result<PreparedFlowpilotSession, String> {
     append_automation_log(&app, "session.prepare.start", "");
-    let worker_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        prepare_flowpilot_session_inner(worker_app, account_id)
-    })
-    .await
-    .map_err(|error| format!("FlowPilot session preparation worker failed: {error}"))?;
+    let result = async {
+        if !valid_account_id(&account_id) {
+            return Err("Invalid FlowPilot account id.".to_string());
+        }
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| "LOCALAPPDATA is unavailable; FlowPilot cannot be located.".to_string())?;
+        let descriptor_path = local_app_data
+            .join("com.flowpilot.desktop")
+            .join("automation-bridge.json");
+        let descriptor: FlowpilotBridgeDescriptor = serde_json::from_slice(
+            &fs::read(descriptor_path)
+                .map_err(|_| "FlowPilot session host is unavailable. Install FlowPilot 1.5.4 or newer, open it, then start the queue again.".to_string())?,
+        )
+        .map_err(|_| "FlowPilot's automation bridge descriptor is invalid. Restart FlowPilot.".to_string())?;
+        if !valid_flowpilot_endpoint(&descriptor.endpoint) || descriptor.token.len() < 32 {
+            return Err("FlowPilot's automation bridge descriptor is invalid. Restart FlowPilot.".to_string());
+        }
+        let payload: FlowpilotBridgeResponse = reqwest::Client::builder()
+            .timeout(Duration::from_secs(40))
+            .build()
+            .map_err(|error| error.to_string())?
+            .post(format!("{}/v1/session/open", descriptor.endpoint.trim_end_matches('/')))
+            .bearer_auth(descriptor.token)
+            .json(&json!({ "accountId": account_id }))
+            .send()
+            .await
+            .map_err(|_| "FlowPilot session host is not running. Open or restart FlowPilot, then start the queue again.".to_string())?
+            .json()
+            .await
+            .map_err(|_| "FlowPilot returned an invalid automation response.".to_string())?;
+        if !payload.ok {
+            return Err(payload.error.unwrap_or_else(|| "FlowPilot could not open the selected session.".to_string()));
+        }
+        let value = payload.value
+            .ok_or_else(|| "FlowPilot did not return an automation endpoint.".to_string())?;
+        if !valid_flowpilot_endpoint(&value.cdp_endpoint) {
+            return Err("FlowPilot returned an unsafe automation endpoint.".to_string());
+        }
+        Ok(PreparedFlowpilotSession { cdp_endpoint: value.cdp_endpoint })
+    }
+    .await;
     match &result {
-        Ok(session) => append_automation_log(&app, "session.prepare.complete", &format!("cookieCount={}", session.cookies.len())),
-        Err(error) => append_automation_log(&app, "session.prepare.failed", &format!("error={}", safe_log_value(error))),
+        Ok(_) => append_automation_log(&app, "session.prepare.complete", "source=flowpilot-webview2"),
+        Err(error) => append_automation_log(
+            &app,
+            "session.prepare.failed",
+            &format!("error={}", safe_log_value(error)),
+        ),
     }
     result
 }
@@ -467,11 +320,10 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
 #[cfg(test)]
 mod path_tests {
     use super::{
-        command_path, copy_session_profile, google_cookie_domain,
+        command_path, valid_flowpilot_endpoint,
         install_log_directory_for_executable, safe_log_value, should_stop_sidecar,
         valid_account_id,
     };
-    use std::fs;
 
     #[test]
     fn strips_windows_verbatim_prefix_from_local_paths() {
@@ -523,31 +375,12 @@ mod path_tests {
     }
 
     #[test]
-    fn limits_exported_cookies_to_google_domains() {
-        assert!(google_cookie_domain(".google.com"));
-        assert!(google_cookie_domain("accounts.google.com"));
-        assert!(google_cookie_domain("labs.google"));
-        assert!(!google_cookie_domain("google.com.example.org"));
-        assert!(!google_cookie_domain("example.org"));
-    }
-
-    #[test]
-    fn session_snapshot_copies_cookie_files_without_cache_data() {
-        let root = std::env::temp_dir().join(format!("kuntyy-session-copy-test-{}", uuid::Uuid::new_v4()));
-        let source = root.join("source");
-        let destination = root.join("destination");
-        fs::create_dir_all(source.join("EBWebView/Default/Network")).unwrap();
-        fs::create_dir_all(source.join("EBWebView/Default/Cache")).unwrap();
-        fs::write(source.join("EBWebView/Local State"), "key").unwrap();
-        fs::write(source.join("EBWebView/Default/Network/Cookies"), "cookies").unwrap();
-        fs::write(source.join("EBWebView/Default/Cache/large.bin"), "cache").unwrap();
-
-        copy_session_profile(&source, &destination).unwrap();
-
-        assert!(destination.join("EBWebView/Local State").is_file());
-        assert!(destination.join("EBWebView/Default/Network/Cookies").is_file());
-        assert!(!destination.join("EBWebView/Default/Cache/large.bin").exists());
-        fs::remove_dir_all(root).unwrap();
+    fn accepts_only_loopback_flowpilot_endpoints() {
+        assert!(valid_flowpilot_endpoint("http://127.0.0.1:42100"));
+        assert!(!valid_flowpilot_endpoint("http://localhost:42100"));
+        assert!(!valid_flowpilot_endpoint("https://127.0.0.1:42100"));
+        assert!(!valid_flowpilot_endpoint("http://127.0.0.1:42100/path"));
+        assert!(!valid_flowpilot_endpoint("http://example.com:42100"));
     }
 }
 

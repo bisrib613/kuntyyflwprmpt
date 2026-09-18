@@ -1,10 +1,10 @@
 # Kuntyy AutoPrompt
 
-Lightweight Google Flow prompt queue and auto-downloader using local FlowPilot sessions and the user's installed Google Chrome.
+Lightweight Google Flow prompt queue and auto-downloader using the original local FlowPilot session.
 
 ## Current status
 
-The repository includes the desktop UI, FlowPilot account/profile discovery, isolated session snapshots, project discovery/creation, single and bulk queues, per-job and global assets, native Google Flow settings, result-card download routing, quality fallbacks, and tests. Live selectors are isolated in the Flow adapter because Google Flow may change them.
+The repository includes the desktop UI, direct FlowPilot WebView2 session attachment, project discovery/creation, single and bulk queues, per-job and global assets, native Google Flow settings, result-card download routing, quality fallbacks, and tests. Live selectors are isolated in the Flow adapter because Google Flow may change them.
 
 ## Development
 
@@ -16,7 +16,7 @@ npm run build
 npm run dev
 ```
 
-Google Chrome and an existing FlowPilot Google Flow session are required for a real run. ChromeDriver and a bundled browser are not used.
+An updated, running FlowPilot with an existing Google Flow session is required for a real run. Playwright attaches to that session through Chromium DevTools Protocol. ChromeDriver, a bundled browser, and a second Chrome profile are not used.
 
 ## Windows release and updates
 

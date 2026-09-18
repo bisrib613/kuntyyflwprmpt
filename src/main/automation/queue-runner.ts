@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { rm } from "node:fs/promises"
-import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
+import type { FlowpilotAccount, QueueEvent, RunSettings } from "../../shared/contracts.js"
 import { parsePromptText } from "../../shared/prompt-file.js"
 import { FlowController } from "./flow-controller.js"
 import { logAutomation } from "../../sidecar/logger.js"
@@ -13,15 +12,14 @@ export class QueueRunner {
 
   constructor(
     private readonly account: FlowpilotAccount,
-    private readonly profileDirectory: string,
-    private readonly cookies: BrowserCookie[],
+    private readonly cdpEndpoint: string,
     private readonly emit: (event: QueueEvent) => void,
   ) {}
 
   async connect(): Promise<FlowController> {
     if (!this.controller) {
       logAutomation("runner.connect.start", { accountId: this.account.id })
-      this.controller = await FlowController.launch(this.profileDirectory, this.cookies)
+      this.controller = await FlowController.connect(this.cdpEndpoint)
       logAutomation("runner.connect.complete", { accountId: this.account.id })
     }
     return this.controller
@@ -95,7 +93,6 @@ export class QueueRunner {
       await this.controller?.close()
     } finally {
       this.controller = null
-      await rm(this.profileDirectory, { recursive: true, force: true })
       logAutomation("runner.close.complete", { accountId: this.account.id })
     }
   }

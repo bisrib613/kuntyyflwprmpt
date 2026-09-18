@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core"
-import type { AssetInput, BrowserCookie, PromptJob, RunSettings } from "../../shared/contracts.js"
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core"
+import type { AssetInput, PromptJob, RunSettings } from "../../shared/contracts.js"
 import { qualityFallbacks, qualityMenuLabel } from "../../shared/quality.js"
 import { FLOW_APP_URL, isSignedOutFlowRoute } from "./flow-route.js"
 import { flowSelectors } from "./selectors.js"
@@ -15,25 +15,39 @@ const sanitize = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
 export class FlowController {
   private readonly assetRefs = new Map<string, string>()
   private activeProjectId: string | null = null
-  private constructor(private readonly context: BrowserContext, private readonly page: Page) {}
+  private constructor(private readonly browser: Browser, private readonly context: BrowserContext, private readonly page: Page) {}
 
-  static async launch(profileDirectory: string, cookies: BrowserCookie[]): Promise<FlowController> {
-    logAutomation("chrome.launch.start", { channel: "chrome", headless: false, profile: path.basename(profileDirectory), cookieCount: cookies.length })
-    const context = await chromium.launchPersistentContext(profileDirectory, {
-      channel: "chrome",
-      headless: false,
-      timeout: 30_000,
-      acceptDownloads: true,
-      viewport: { width: 1440, height: 900 },
-    })
-    logAutomation("chrome.launch.complete")
-    await context.addCookies(cookies)
-    logAutomation("chrome.cookies.added", { count: cookies.length })
-    const page = context.pages()[0] || await context.newPage()
-    return new FlowController(context, page)
+  static async connect(cdpEndpoint: string): Promise<FlowController> {
+    logAutomation("flowpilot.cdp.connect.start")
+    const deadline = Date.now() + 20_000
+    let browser: Browser | null = null
+    let lastError: unknown
+    while (!browser && Date.now() < deadline) {
+      try {
+        browser = await chromium.connectOverCDP(cdpEndpoint, { timeout: 2_000 })
+      } catch (error) {
+        lastError = error
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
+    if (!browser) {
+      throw new Error(`FlowPilot's WebView2 automation endpoint did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+    }
+    const context = browser.contexts()[0]
+    if (!context) {
+      await browser.close()
+      throw new Error("FlowPilot opened its session, but WebView2 did not expose a browser context.")
+    }
+    context.setDefaultTimeout(30_000)
+    const pages = context.pages()
+    const page = pages.find((candidate) => /(^|\.)((labs|flow)\.google)$/.test(new URL(candidate.url()).hostname))
+      || pages.find((candidate) => candidate.url() !== "about:blank")
+      || await context.newPage()
+    logAutomation("flowpilot.cdp.connect.complete", { pageCount: pages.length })
+    return new FlowController(browser, context, page)
   }
 
-  async close(): Promise<void> { await this.context.close() }
+  async close(): Promise<void> { await this.browser.close() }
 
   private async openFlowHome(): Promise<void> {
     logAutomation("flow.navigation.start", { destination: "app", url: FLOW_APP_URL })

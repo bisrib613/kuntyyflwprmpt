@@ -214,7 +214,7 @@ export function App() {
       <section className="settings-card"><div><span>Installed version</span><strong>v{updateState.currentVersion}</strong><p>{updateState.message}</p></div><button className="secondary" onClick={() => setUpdatesOpen(true)}>Open updates</button></section>
       <section className="settings-card"><div><span>Diagnostic logs</span><strong className="path-value" title={logDirectory}>{logDirectory}</strong><p>Startup, automation, updater, and crash diagnostics are stored beside the installed application.</p></div><button className="secondary" onClick={() => void openLogs()}>Open logs folder</button></section>
       <section className="settings-card"><div><span>Automation browser</span><strong>Local Google Chrome</strong><p>Chrome is opened only when a queue starts and is reused for later runs on the same account.</p></div></section>
-      <section className="settings-card"><div><span>Session source</span><strong>FlowPilot</strong><p>Google cookies remain local and are transferred into an isolated temporary Chrome profile.</p></div></section>
+      <section className="settings-card"><div><span>Session source</span><strong>FlowPilot WebView2</strong><p>Automation attaches to the selected FlowPilot session directly. Cookies and browser storage are not copied into another profile.</p></div></section>
     </main>}
 
     {updatesOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setUpdatesOpen(false) }}>

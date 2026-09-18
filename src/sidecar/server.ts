@@ -1,8 +1,6 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import path from "node:path"
-import os from "node:os"
-import type { BrowserCookie, FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
+import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
 import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
@@ -49,20 +47,18 @@ async function request(method: string, params: unknown): Promise<unknown> {
     }
     case "session:open": {
       const accountId = typeof input.accountId === "string" ? input.accountId : ""
-      const profilePath = typeof input.profilePath === "string" ? input.profilePath : ""
-      const cookies = Array.isArray(input.cookies) ? input.cookies as BrowserCookie[] : []
+      const cdpEndpoint = typeof input.cdpEndpoint === "string" ? input.cdpEndpoint : ""
       accounts = await listFlowpilotAccounts()
       const account = accounts.find((candidate) => candidate.id === accountId)
       if (!account) throw new Error("Select a valid Google Flow account from FlowPilot.")
-      const snapshotRoot = path.join(os.tmpdir(), "kuntyy-autoprompt-sessions")
-      const relative = path.relative(snapshotRoot, profilePath)
-      if (!profilePath || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Invalid temporary automation profile path.")
-      if (!cookies.length || cookies.some((cookie) => !cookie || typeof cookie.name !== "string" || typeof cookie.value !== "string" || typeof cookie.domain !== "string")) {
-        throw new Error("FlowPilot did not provide a valid signed-in Google session.")
+      let endpoint: URL
+      try { endpoint = new URL(cdpEndpoint) } catch { throw new Error("FlowPilot did not provide a valid automation endpoint.") }
+      if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.pathname !== "/" || endpoint.search || endpoint.hash) {
+        throw new Error("FlowPilot did not provide a safe local automation endpoint.")
       }
-      logAutomation("session.open", { accountId, cookieCount: cookies.length, profile: path.basename(profilePath) })
+      logAutomation("session.open", { accountId, source: "flowpilot-webview2" })
       await closeRunner()
-      runner = new QueueRunner(account, profilePath, cookies, emit)
+      runner = new QueueRunner(account, cdpEndpoint, emit)
       connectedAccountId = account.id
       return null
     }
