@@ -55,3 +55,13 @@ Tauri Updater reads `latest.json` from GitHub Releases. Checking is single-fligh
 GitHub Actions runs on `windows-latest` with Node 24 and stable Rust. A manual patch/minor/major release verifies tests, bumps the JavaScript, Rust, and Tauri manifests, builds signed NSIS artifacts, enforces the size gate, pushes the version commit and tag, then creates the release with the setup executable, signature, and `latest.json`.
 
 Public GitHub release assets are required by this configuration. A private source repository must publish update artifacts through a public release repository or an authenticated update service; a reusable GitHub token must never be embedded in the client.
+
+## API Vault boundary
+
+API Vault is independent of the FlowPilot session host. Its provider adapters, conversation store, document parser, and agent runtime live in the Node sidecar and do not attach to Google Flow or a browser.
+
+The agent's user-visible workspace is `<install directory>/.agents`. Relative output paths resolve from this directory. Internal conversations and run metadata remain under `<install directory>/data/api-vault`, outside the agent's normal tool surface.
+
+Read access is limited to `.agents`, user-selected inputs, and paths explicitly named by the direct user prompt. Write access defaults to `.agents`. An external absolute write is allowed only when the direct user prompt names the destination; retrieved documents and model/tool output can never widen that grant.
+
+Tool calls are capability requests, not trusted instructions. The sidecar validates the tool name, canonical path, operation, size, and run-scoped grants before touching the filesystem. Provider API keys and document contents are never written to diagnostic logs.

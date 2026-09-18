@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/sidecar/**/*.ts"]
+  "include": ["src/sidecar/**/*.ts", "src/shared/**/*.d.ts"]
 }

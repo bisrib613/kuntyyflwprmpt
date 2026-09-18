@@ -5,11 +5,14 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
-  "Run Playwright automation inside the selected FlowPilot WebView2 session instead of copying cookies into a separate Chrome profile.",
-  "Preserve the complete FlowPilot login state, including browser storage and service-worker state that cookie-only transfer omitted.",
-  "Open the selected Google Flow account automatically when the queue starts; no separate Connect action is required.",
-  "Use a token-protected localhost bridge between FlowPilot and AutoPrompt without logging session data or prompt contents.",
-  "Remove obsolete cookie snapshots, cookie injection, temporary Chrome profiles, and local Chrome launch code.",
+  "Add API Vault with Gemini, OpenAI, 9Router, and custom OpenAI-compatible providers.",
+  "Add model, endpoint, API key, reasoning level, and 9Router fallback-model controls.",
+  "Keep system instructions, user prompts, prompt files, images, and parsed document assets as separate inputs.",
+  "Add independent, continued, and chained local conversation modes without treating provider response IDs as sessions.",
+  "Add Prompt and Agent modes with bounded filesystem tools and a default workspace beside the installed app under .agents.",
+  "Restrict external reads and writes to user-selected assets or paths explicitly named in the direct prompt.",
+  "Add Text / JSON and Image outputs with an explicit image result folder.",
+  "Bundle PDF and DOCX parsing into the automation sidecar so installed builds do not require extra packages.",
 ]
 
 export const PATCH_LOG: PatchLogEntry[] = [

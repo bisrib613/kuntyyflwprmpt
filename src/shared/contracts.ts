@@ -1,3 +1,5 @@
+import type { ApiVaultAsset, ApiVaultRequest, ApiVaultResponse } from "./api-vault.js"
+
 export type OutputKind = "image" | "video"
 export type ImageQuality = "original-1k" | "upscale-2k" | "upscale-4k"
 export type VideoQuality = "original-720p" | "upscale-1080p" | "upscale-4k" | "gif-270p"
@@ -74,6 +76,10 @@ export type AutoPromptApi = {
   pickAssets(): Promise<ApiResult<AssetInput[]>>
   pickPromptFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   pickDownloadDirectory(): Promise<ApiResult<string | null>>
+  pickApiVaultAssets(): Promise<ApiResult<ApiVaultAsset[]>>
+  pickApiVaultTextFile(): Promise<ApiResult<{ name: string; text: string } | null>>
+  runApiVault(request: ApiVaultRequest): Promise<ApiResult<ApiVaultResponse>>
+  listApiVaultModels(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string): Promise<ApiResult<string[]>>
   getLogDirectory(): Promise<ApiResult<string>>
   openLogDirectory(): Promise<ApiResult<void>>
   startRun(settings: RunSettings): Promise<ApiResult<{ runId: string }>>
