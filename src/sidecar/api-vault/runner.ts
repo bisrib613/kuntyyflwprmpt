@@ -273,7 +273,9 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
-  const tools = request.executionMode === "agent" ? [...FILESYSTEM_TOOLS] : []
+  const tools = request.executionMode === "agent"
+    ? FILESYSTEM_TOOLS.filter((tool) => context.allowWrite || !["create_directory", "write_text_file", "write_json_file"].includes(tool.function.name))
+    : []
   let responseId: string | undefined
   let finalText = ""
   let calls = 0

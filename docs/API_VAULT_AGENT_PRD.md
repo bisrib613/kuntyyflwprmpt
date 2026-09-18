@@ -132,6 +132,8 @@ Defaults:
 ## Output and errors
 
 - Text and JSON responses are displayed and may be saved.
+- Text/JSON runs never require a result folder. Auto-save defaults off; a completed result remains scrollable, copyable, and saveable later without another provider request.
+- Agent write tools are exposed only when the direct user prompt explicitly requests creating or saving a file.
 - Image output uses the provider's image-generation route and requires a separately selected result directory.
 - Agent-created relative files are written below `.agents`.
 - Existing files are not overwritten unless the direct user instruction requests replacement; otherwise a numeric suffix is used.

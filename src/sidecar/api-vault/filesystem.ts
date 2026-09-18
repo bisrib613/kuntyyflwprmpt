@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto"
 import { parseDocument } from "./documents.js"
 
 export type FileGrant = { root: string; operation: "read" | "write" }
-export type ToolContext = { workspace: string; readGrants: FileGrant[]; writeGrants: FileGrant[]; allowOverwrite: boolean }
+export type ToolContext = { workspace: string; readGrants: FileGrant[]; writeGrants: FileGrant[]; allowWrite: boolean; allowOverwrite: boolean }
 
 function contains(root: string, candidate: string): boolean {
   const value = relative(root, candidate)
@@ -47,6 +47,7 @@ export function createToolContext(installDirectory: string, prompt: string, asse
   const promptPaths = explicitPaths(prompt)
   return {
     workspace,
+    allowWrite: /\b(?:(?:save|write|export|store|simpan|tulis|ekspor).{0,40}(?:file|folder|directory|path|json|txt|markdown|hasil|output)|(?:create|buat).{0,30}(?:file|folder|directory|json|txt|markdown))\b/i.test(prompt),
     allowOverwrite: /\b(?:overwrite|replace\s+(?:the\s+)?existing|timpa|ganti\s+file)\b/i.test(prompt),
     readGrants: [workspace, ...assetPaths.map((pathValue) => resolve(pathValue)), ...promptPaths].map((root) => ({ root, operation: "read" as const })),
     writeGrants: [workspace, ...promptPaths].map((root) => ({ root, operation: "write" as const })),
@@ -54,6 +55,7 @@ export function createToolContext(installDirectory: string, prompt: string, asse
 }
 
 export async function resolveToolPath(context: ToolContext, requested: string, operation: "read" | "write"): Promise<string> {
+  if (operation === "write" && !context.allowWrite) throw new Error("Local runtime blocked file creation because the direct user prompt did not request saving a file.")
   const target = resolve(isAbsolute(requested) ? requested : join(context.workspace, requested || "."))
   const canonical = await canonicalForAuthorization(target)
   const grants = operation === "read" ? context.readGrants : context.writeGrants

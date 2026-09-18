@@ -5,6 +5,10 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Keep Text and JSON results in a bounded scrollable panel with Copy and Save result actions.",
+  "Allow Text and JSON runs without a selected result folder, even when Auto-save was enabled accidentally.",
+  "Save completed Text and JSON responses later without repeating the provider request.",
+  "Expose Agent write tools only when the direct user prompt explicitly asks to create or save a file.",
   "Add API Vault with Gemini, OpenAI, 9Router, and custom OpenAI-compatible providers.",
   "Add model, endpoint, API key, reasoning level, and 9Router fallback-model controls.",
   "Keep system instructions, user prompts, prompt files, images, and parsed document assets as separate inputs.",

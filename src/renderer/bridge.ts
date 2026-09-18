@@ -164,6 +164,10 @@ const api: AutoPromptApi = {
   },
   runApiVault: (request) => sidecar("api-vault:run", { request }),
   listApiVaultModels: (provider, endpoint, apiKey) => sidecar("api-vault:models", { provider, endpoint, apiKey }),
+  saveApiVaultResult: async (directory, filename, content, format) => {
+    try { return { ok: true, value: await invoke<string>("save_api_vault_result", { directory, filename, content, format }) } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
   getLogDirectory: async () => {
     try { return { ok: true, value: await invoke<string>("get_log_directory") } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }

@@ -30,3 +30,4 @@ label { display:block; color:#aeb7c2; font-size:11px; margin-top:12px; }select,i
 @media(max-width:1150px){.vault-layout{grid-template-columns:250px minmax(430px,1fr) 250px}.vault-config,.vault-run{padding:18px}.vault-workspace{padding:20px}}
 .vault-folder{margin-top:10px}
 .model-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end}.model-picker select{min-width:0}.model-picker button{height:38px;margin-top:7px}
+.result-save-settings{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}.vault-response-head>div:first-child{min-width:0;display:flex;flex-direction:column;gap:4px}.result-actions{display:flex;gap:6px;flex:0 0 auto}.result-actions button{padding:6px 9px;font-size:9px}.vault-response pre{max-height:320px;overflow:auto;border:1px solid #202934;border-radius:8px;background:#090d12;padding:12px}
