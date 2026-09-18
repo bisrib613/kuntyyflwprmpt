@@ -3,17 +3,15 @@
 ## Process boundaries
 
 - **Tauri host:** owns native dialogs, updater verification, sidecar lifecycle, and the authenticated localhost bridge.
-- **Node sidecar:** owns FlowPilot profile discovery, session snapshotting, Playwright, queue lifecycle, and downloads.
+- **Node sidecar:** attaches Playwright to FlowPilot's WebView2 session and owns queue lifecycle and downloads.
 - **React renderer:** configuration and queue UI only.
 - **Flow adapter:** contains every Google Flow selector and behavior. UI components never query Flow DOM directly.
 
 The host creates a random 256-bit token for each launch, passes it to the child process, and accepts sidecar responses only over loopback with bearer authentication. The renderer cannot choose a binary or arbitrary command to execute.
 
-## Session snapshot
+## Session host
 
-FlowPilot stores accounts at the Tauri local-data directory for `com.flowpilot.desktop` and service profiles under `webview-profiles/flow-{accountId}`. AutoPrompt validates the account ID, reads account metadata, copies the selected profile to its own temporary user-data directory, then launches installed Google Chrome with that copy.
-
-This is deliberately a snapshot rather than shared live profile access. Chromium profile databases are not safe for simultaneous writes by two applications. However, a WebView2 profile and a Chrome profile must not be assumed to have interchangeable encrypted authentication state merely because their files look similar. Live Windows validation with a real FlowPilot account is a release gate. If that validation fails, session sync must move to an explicit FlowPilot companion handoff; the tool must never report a copied-but-signed-out profile as synchronized.
+FlowPilot remains the sole owner of `webview-profiles/flow-{accountId}` and opens the selected profile in WebView2. A token-protected loopback broker asks FlowPilot to expose that exact browser process on an ephemeral local CDP port. AutoPrompt validates both local endpoints and Playwright attaches to the existing context. Cookies, local storage, IndexedDB, service workers, and related session state remain in their original profile instead of being copied or translated into Chrome.
 
 ## Automation state machine
 
@@ -46,7 +44,7 @@ The Flow asset picker does not expose a stable asset ID on its option button. It
 
 ## Packaging
 
-Tauri supplies the desktop shell and Windows NSIS setup wizard. The package includes the compiled `playwright-core` sidecar, but no Node runtime, Chromium, ChromeDriver, Electron, or browser cache. The host uses Node.js 20 or newer from the user's `PATH`, and Playwright launches the user's installed Chrome through its supported `chrome` channel.
+Tauri supplies the desktop shell and Windows NSIS setup wizard. The package includes the compiled `playwright-core` sidecar, but no Node runtime, Chromium, ChromeDriver, Electron, or browser cache. The host uses Node.js 20 or newer from the user's `PATH`, and Playwright attaches to FlowPilot's system WebView2 runtime over CDP.
 
 The release verifier rejects an installer at or above 50 MiB and rejects unsigned updater artifacts. This is a build invariant, not an informal target.
 

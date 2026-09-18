@@ -18,8 +18,8 @@ The application is a new product and repository. It does not change the released
 ## 3. Primary workflow
 
 1. Load Google Flow accounts from FlowPilot's local `accounts.json`.
-2. Copy the selected `webview-profiles/flow-{accountId}` into an isolated automation snapshot.
-3. Launch the user's installed Google Chrome through a Playwright persistent context using that snapshot.
+2. Ask FlowPilot to open the selected original `webview-profiles/flow-{accountId}` session in WebView2.
+3. Attach Playwright to that WebView2 context through a token-protected localhost bridge.
 4. List existing Flow projects.
 5. The user selects an existing project or creates one new project for the run.
 6. The user configures output type, model, aspect ratio, variants (1–3), quality, assets, prompts, and auto-download.
@@ -87,11 +87,11 @@ Google Flow performs every upscale. Disabled or missing native menu items are ca
 
 - Read only Flow service accounts.
 - Validate account IDs before resolving paths.
-- Copy the profile into the application's own local data before automation.
+- Keep FlowPilot as the sole owner of its profile and attach to its live WebView2 context.
 - Never log cookies, authorization headers, signed media URLs, or profile database contents.
 - Never upload session data.
-- Do not mutate or delete the original FlowPilot profile.
-- If snapshotting fails because FlowPilot is using a locked database, display an actionable error instead of force-copying or corrupting the profile.
+- Never copy, mutate, or delete FlowPilot authentication databases directly.
+- Refuse non-loopback bridge or CDP endpoints and never log bridge tokens.
 
 ## 10. Acceptance criteria
 
@@ -105,7 +105,7 @@ Google Flow performs every upscale. Disabled or missing native menu items are ca
 - Original image download does not open the card or menu.
 - Each downloaded filename includes run, job, and variant identity to prevent overwrites.
 - Typecheck, unit tests, and production renderer build pass.
-- A live Windows test proves that the selected FlowPilot account opens Flow without another login. A copied profile that redirects to Google sign-in fails this acceptance criterion.
+- A live Windows test proves that the selected FlowPilot account opens Flow without another login through the original WebView2 session.
 
 ## 11. Installation and updates
 
