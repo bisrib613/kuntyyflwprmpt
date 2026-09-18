@@ -446,6 +446,55 @@ fn read_prompt_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn save_api_vault_result(directory: String, filename: String, content: String, format: String) -> Result<String, String> {
+    let folder = std::path::PathBuf::from(directory);
+    if !folder.is_absolute() || !folder.is_dir() {
+        return Err("Select an existing result folder first.".to_string());
+    }
+    if format != "txt" && format != "json" {
+        return Err("Result format must be TXT or JSON.".to_string());
+    }
+    if format == "json" {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .map_err(|error| format!("The provider result is not valid JSON: {error}"))?;
+    }
+    let mut name = filename.trim().to_string();
+    if name.is_empty() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs();
+        name = format!("result-{stamp}");
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err("Filename cannot contain a folder path.".to_string());
+    }
+    let extension = format.as_str();
+    if !name.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+        name.push('.');
+        name.push_str(extension);
+    }
+    let base = std::path::Path::new(&name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Filename is invalid.".to_string())?;
+    for index in 1..10_000 {
+        let candidate_name = if index == 1 { name.clone() } else { format!("{base}-{index}.{extension}") };
+        let candidate = folder.join(candidate_name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(content.as_bytes()).map_err(|error| error.to_string())?;
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("Unable to choose an available result filename.".to_string())
+}
+
+#[tauri::command]
 fn get_log_directory() -> Result<String, String> {
     Ok(command_path(log_directory()?))
 }
@@ -509,6 +558,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sidecar_request,
             read_prompt_file,
+            save_api_vault_result,
             prepare_flowpilot_session,
             get_log_directory,
             open_log_directory,

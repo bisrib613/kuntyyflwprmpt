@@ -9,6 +9,7 @@ const PROVIDERS: Array<{ value: ApiProvider; label: string; endpoint: string; mo
   { value: "9router", label: "9Router", endpoint: "http://localhost:20128/v1", model: "ag/gemini-3.6-flash-low" },
   { value: "custom", label: "Custom", endpoint: "http://localhost:8080/v1", model: "" },
 ]
+type ResultFormat = "auto" | "txt" | "json"
 
 export function ApiVaultView() {
   const [provider, setProvider] = useState<ApiProvider>("9router")
@@ -22,6 +23,10 @@ export function ApiVaultView() {
   const [executionMode, setExecutionMode] = useState<"prompt" | "agent">("prompt")
   const [outputKind, setOutputKind] = useState<ApiOutputKind>("text")
   const [outputDirectory, setOutputDirectory] = useState("")
+  const [autoSaveResult, setAutoSaveResult] = useState(false)
+  const [resultDirectory, setResultDirectory] = useState("")
+  const [resultFilename, setResultFilename] = useState("")
+  const [resultFormat, setResultFormat] = useState<ResultFormat>("auto")
   const [conversationMode, setConversationMode] = useState<ConversationMode>("independent")
   const [threadId, setThreadId] = useState("")
   const [systemInstruction, setSystemInstruction] = useState("")
@@ -67,6 +72,33 @@ export function ApiVaultView() {
     if (result.value) setOutputDirectory(result.value)
   }
 
+  const chooseResultDirectory = async (): Promise<string> => {
+    const result = await window.autoPrompt.pickDownloadDirectory()
+    if (!result.ok) { setStatus(result.error); return "" }
+    if (!result.value) return ""
+    setResultDirectory(result.value)
+    return result.value
+  }
+
+  const resolvedResultFormat = (text: string): "txt" | "json" => {
+    if (resultFormat !== "auto") return resultFormat
+    try { JSON.parse(text); return "json" } catch { return "txt" }
+  }
+
+  const saveResponse = async (response: ApiVaultResponse, directory = resultDirectory): Promise<ApiVaultResponse | null> => {
+    const destination = directory || await chooseResultDirectory()
+    if (!destination) return null
+    const result = await window.autoPrompt.saveApiVaultResult(destination, resultFilename, response.text, resolvedResultFormat(response.text))
+    if (!result.ok) { setStatus(result.error); return null }
+    setStatus(`Saved · ${result.value}`)
+    return { ...response, files: response.files.includes(result.value) ? response.files : [...response.files, result.value] }
+  }
+
+  const saveExistingResponse = async (response: ApiVaultResponse) => {
+    const saved = await saveResponse(response)
+    if (saved) setResponses((current) => current.map((item) => item.runId === response.runId ? saved : item))
+  }
+
   const run = async () => {
     if (!endpoint.trim() || !model.trim() || !prompts.length) return
     setRunning(true); setResponses([])
@@ -84,10 +116,12 @@ export function ApiVaultView() {
         if (!result.ok) throw new Error(result.error)
         activeThreadId = result.value.threadId
         if (activeThreadId) setThreadId(activeThreadId)
-        collected.push(result.value)
+        let completed = result.value
+        if (outputKind === "text" && autoSaveResult && resultDirectory) completed = await saveResponse(result.value, resultDirectory) || result.value
+        collected.push(completed)
         setResponses([...collected])
       }
-      setStatus(`Completed ${collected.length} prompt${collected.length === 1 ? "" : "s"}.`)
+      setStatus(`Completed ${collected.length} prompt${collected.length === 1 ? "" : "s"}.${outputKind === "text" && autoSaveResult && !resultDirectory ? " Result not saved because no folder was selected." : ""}`)
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)) }
     finally { setRunning(false) }
   }
@@ -107,6 +141,12 @@ export function ApiVaultView() {
       <div className="section-heading vault-section"><span>02</span><div><h2>Runtime</h2><p>Context and tools</p></div></div>
       <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => setOutputKind(event.target.value as ApiOutputKind)}><option value="text">Text / JSON</option><option value="image">Image</option></select></label>
       {outputKind === "image" && <div className="folder vault-folder"><span>{outputDirectory || "No image result folder selected"}</span><button disabled={running} onClick={() => void chooseOutputDirectory()}>Choose</button></div>}
+      {outputKind === "text" && <div className="result-save-settings">
+        <label className="toggle-row"><span><strong>Auto-save result</strong><small>Run still works when no folder is selected</small></span><input type="checkbox" checked={autoSaveResult} disabled={running} onChange={(event) => setAutoSaveResult(event.target.checked)} /></label>
+        <label>File format<select value={resultFormat} disabled={running} onChange={(event) => setResultFormat(event.target.value as ResultFormat)}><option value="auto">Auto-detect</option><option value="txt">TXT</option><option value="json">JSON</option></select></label>
+        <label>Filename <span className="optional">Optional</span><input value={resultFilename} disabled={running} onChange={(event) => setResultFilename(event.target.value)} placeholder="Automatic when blank" /></label>
+        <div className="folder vault-folder"><span>{resultDirectory || "No text result folder selected"}</span><button disabled={running} onClick={() => void chooseResultDirectory()}>Choose</button></div>
+      </div>}
       <label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "prompt" | "agent"; setExecutionMode(value); if (value === "agent") setOutputKind("text") }}><option value="prompt">Prompt</option><option value="agent">Agent</option></select></label>
       <label>Conversation<select value={conversationMode} disabled={running} onChange={(event) => setConversationMode(event.target.value as ConversationMode)}><option value="independent">Independent</option><option value="continue">Continue thread</option><option value="chain">Chain bulk prompts</option></select></label>
       {conversationMode === "continue" && <label>Thread ID <span className="optional">Blank starts new</span><input value={threadId} disabled={running} onChange={(event) => setThreadId(event.target.value)} placeholder="Local conversation ID" /></label>}
@@ -123,7 +163,7 @@ export function ApiVaultView() {
         <div className="vault-field-head"><div><strong>Assets</strong><span>Images stay native; documents are parsed locally</span></div><button className="text-button" disabled={running} onClick={() => void addAssets()}>＋ Select assets</button></div>
         <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div>
       </article>
-      {responses.map((response, index) => <article className="vault-response" key={response.runId}><div className="vault-response-head"><strong>Result {index + 1}</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div><pre>{response.text}</pre>{response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}{response.trace.length > 0 && <details><summary>Agent trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}</article>)}
+      {responses.map((response, index) => <article className="vault-response" key={response.runId}><div className="vault-response-head"><div><strong>Result {index + 1}</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div><div className="result-actions"><button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>{outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}</div></div><pre>{response.text}</pre>{response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}{response.trace.length > 0 && <details><summary>Agent trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}</article>)}
     </section>
 
     <aside className="vault-run">

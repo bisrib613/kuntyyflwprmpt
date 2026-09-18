@@ -80,6 +80,7 @@ export type AutoPromptApi = {
   pickApiVaultTextFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   runApiVault(request: ApiVaultRequest): Promise<ApiResult<ApiVaultResponse>>
   listApiVaultModels(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string): Promise<ApiResult<string[]>>
+  saveApiVaultResult(directory: string, filename: string, content: string, format: "txt" | "json"): Promise<ApiResult<string>>
   getLogDirectory(): Promise<ApiResult<string>>
   openLogDirectory(): Promise<ApiResult<void>>
   startRun(settings: RunSettings): Promise<ApiResult<{ runId: string }>>
