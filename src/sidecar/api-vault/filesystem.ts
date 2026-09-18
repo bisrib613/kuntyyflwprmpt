@@ -55,7 +55,7 @@ export function createToolContext(installDirectory: string, prompt: string, asse
 }
 
 export async function resolveToolPath(context: ToolContext, requested: string, operation: "read" | "write"): Promise<string> {
-  if (operation === "write" && !context.allowWrite) throw new Error("Local runtime blocked file creation because the direct user prompt did not request saving a file.")
+  if (operation === "write" && !context.allowWrite) throw new Error("Local runtime blocked write because the direct user prompt did not request saving a file.")
   const target = resolve(isAbsolute(requested) ? requested : join(context.workspace, requested || "."))
   const canonical = await canonicalForAuthorization(target)
   const grants = operation === "read" ? context.readGrants : context.writeGrants
