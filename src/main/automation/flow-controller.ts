@@ -11,6 +11,7 @@ type OutputCard = { locator: Locator; index: number }
 type ActiveProject = { id: string; name: string }
 
 const sanitize = (value: string) => value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").replace(/[. ]+$/g, "").slice(0, 120) || "output"
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 export class FlowController {
   private readonly assetRefs = new Map<string, string>()
@@ -103,18 +104,33 @@ export class FlowController {
 
   async configure(settings: RunSettings): Promise<void> {
     logAutomation("flow.configure.start", { output: settings.output, model: settings.model, aspectRatio: settings.aspectRatio, variants: settings.variants })
-    await this.page.locator(flowSelectors.settings).click()
-    await this.page.getByRole("radio", { name: settings.output === "image" ? /Image/i : /Video/i }).click()
-    await this.page.getByRole("radio", { name: new RegExp(settings.aspectRatio.replace(":", "\\s*:\\s*")) }).click()
-    const modelTrigger = this.page.getByLabel("Select model family")
-    if (await modelTrigger.isVisible()) {
+    const settingsTrigger = this.page.locator(flowSelectors.settings)
+    await settingsTrigger.click()
+
+    const settingsOverlay = this.page.locator(flowSelectors.settingsOverlay)
+      .filter({ has: this.page.getByLabel("Select model family") })
+      .last()
+    await settingsOverlay.waitFor({ state: "visible" })
+
+    await this.selectRadio(settingsOverlay.getByRole("radio", { name: settings.output === "image" ? /Image/i : /Video/i }))
+    await this.selectRadio(settingsOverlay.getByRole("radio", { name: new RegExp(settings.aspectRatio.replace(":", "\\s*:\\s*")) }))
+    const modelTrigger = settingsOverlay.getByLabel("Select model family")
+    if (await modelTrigger.isVisible() && !(await modelTrigger.innerText()).includes(settings.model)) {
       await modelTrigger.click()
-      const model = this.page.getByText(settings.model, { exact: true })
-      if (await model.count()) await model.click()
+      const modelMenu = this.page.getByRole("menu").last()
+      await modelMenu.waitFor({ state: "visible" })
+      await modelMenu.getByRole("menuitem", { name: new RegExp(`${escapeRegExp(settings.model)}$`) }).click()
+      await this.page.locator(flowSelectors.settingsBackdrop).waitFor({ state: "hidden" })
     }
-    await this.page.getByRole("radio", { name: `x${settings.variants}`, exact: true }).click()
-    await this.page.locator(flowSelectors.settings).press("Escape")
+    await this.selectRadio(settingsOverlay.getByRole("radio", { name: `x${settings.variants}`, exact: true }))
+    await this.page.keyboard.press("Escape")
+    await settingsOverlay.waitFor({ state: "hidden" })
     logAutomation("flow.configure.complete")
+  }
+
+  private async selectRadio(radio: Locator): Promise<void> {
+    await radio.waitFor({ state: "visible" })
+    if ((await radio.getAttribute("aria-checked")) !== "true") await radio.click()
   }
 
   async submitJob(job: PromptJob, sharedAssets: AssetInput[]): Promise<Set<string>> {
