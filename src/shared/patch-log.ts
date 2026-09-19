@@ -5,6 +5,7 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Prevent long API Vault Agent runs from being reported as a dead automation runtime after 30 seconds.",
   "Always show the latest API Vault result, or the provider's real error when a run produces no output.",
   "Read structured assistant text parts returned by OpenAI-compatible providers instead of displaying a blank result.",
   "Add New, Load, and Delete controls for locally saved API Vault conversations.",

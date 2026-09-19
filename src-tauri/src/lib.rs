@@ -260,6 +260,18 @@ fn should_stop_sidecar(window_label: &str, destroyed: bool) -> bool {
     destroyed && window_label == "main"
 }
 
+fn sidecar_request_timeout(method: &str) -> Duration {
+    match method {
+        // One Agent run can include several provider and filesystem-tool rounds.
+        // The sidecar owns the tighter per-round limits; the bridge must not abort
+        // a healthy run while it is still producing a response.
+        "api-vault:run" => Duration::from_secs(30 * 60),
+        "api-vault:models" => Duration::from_secs(60),
+        "events:poll" => Duration::from_secs(15),
+        _ => Duration::from_secs(60),
+    }
+}
+
 fn valid_flowpilot_endpoint(value: &str) -> bool {
     reqwest::Url::parse(value).is_ok_and(|url| {
         url.scheme() == "http"
@@ -410,7 +422,7 @@ fn start_sidecar(app: &tauri::AppHandle) -> Result<AutomationState, String> {
         endpoint: format!("http://127.0.0.1:{}/request", ready.port),
         token,
         client: reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))
             .build()
             .map_err(|error| format!("Unable to initialize the automation bridge: {error}"))?,
         child: Mutex::new(child),
@@ -422,7 +434,7 @@ mod path_tests {
     use super::{
         command_path, valid_flowpilot_endpoint,
         install_log_directory_for_executable, safe_log_value, should_stop_sidecar,
-        valid_account_id,
+        sidecar_request_timeout, valid_account_id,
     };
 
     #[test]
@@ -482,6 +494,13 @@ mod path_tests {
         assert!(!valid_flowpilot_endpoint("http://127.0.0.1:42100/path"));
         assert!(!valid_flowpilot_endpoint("http://example.com:42100"));
     }
+
+    #[test]
+    fn allows_agent_runs_to_outlive_provider_round_timeouts() {
+        assert_eq!(sidecar_request_timeout("api-vault:run"), std::time::Duration::from_secs(30 * 60));
+        assert_eq!(sidecar_request_timeout("api-vault:models"), std::time::Duration::from_secs(60));
+        assert_eq!(sidecar_request_timeout("events:poll"), std::time::Duration::from_secs(15));
+    }
 }
 
 #[tauri::command]
@@ -501,11 +520,19 @@ async fn sidecar_request(app: tauri::AppHandle, state: tauri::State<'_, Automati
         }
     };
     let result = async {
+        let timeout = sidecar_request_timeout(&method);
         state.client
             .post(&state.endpoint)
+            .timeout(timeout)
             .bearer_auth(&state.token)
             .json(&json!({ "method": method, "params": params }))
-            .send().await.map_err(|error| format!("Automation runtime is unavailable: {error}"))?
+            .send().await.map_err(|error| {
+                if error.is_timeout() {
+                    format!("Automation request exceeded {} seconds.", timeout.as_secs())
+                } else {
+                    format!("Automation runtime is unavailable: {error}")
+                }
+            })?
             .error_for_status().map_err(|error| error.to_string())?
             .json::<Value>().await.map_err(|error| format!("Invalid automation response: {error}"))
     }.await;
