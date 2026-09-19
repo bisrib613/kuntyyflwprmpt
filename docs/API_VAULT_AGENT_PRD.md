@@ -28,6 +28,41 @@ Google Flow remains unchanged and continues to use the FlowPilot browser-session
 
 Role definitions and final multi-agent UX are intentionally deferred until 1.0.0 planning.
 
+## Development and update discipline (effective from 0.5.x)
+
+This section is an internal engineering and release rule. It is not an application feature, setting, UI panel, Telegram command, or user-facing runtime behavior.
+
+Every update from 0.5.x onward must include a concise implementation note describing:
+
+- what changed;
+- which PR, merge, commit, or source area was affected;
+- any persistence, compatibility, or migration impact;
+- the focused risk area;
+- the targeted verification performed or deliberately omitted.
+
+Before changing code, review only the relevant evidence:
+
+- recent commits, PRs, and merges that touch the feature;
+- the source files, interfaces, and tests directly affected;
+- release/workflow configuration only when packaging or release behavior changes.
+
+A full-repository audit is not the default. If the intended behavior or implementation is uncertain, perform a targeted review of the relevant history and source before editing. Do not guess based on stale assumptions.
+
+Verification is risk-based:
+
+- do not add debug loops, broad test suites, or CI runs merely as a ritual;
+- use focused static/source review and the smallest relevant check for the changed surface;
+- omit redundant tests when the change is documentation-only or the affected behavior is already established and unchanged;
+- never claim a change is verified when it was not checked;
+- if a targeted check reveals a real issue, fix the issue before release rather than relying on post-release debugging.
+
+Release execution must also be efficient:
+
+- do not wait for a release workflow or CI job unless the user explicitly asks for monitoring;
+- trigger the requested workflow, report the run URL/status, and return without idle waiting;
+- keep release notes limited to the actual patch scope;
+- do not create application logs, notes, or UI elements solely to satisfy this discipline.
+
 ## Native execution modes
 
 Execution mode and conversation selection are separate state. This contract applies identically in the desktop application and Telegram.
