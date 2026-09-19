@@ -60,6 +60,8 @@ export function ApiVaultView() {
       if (settings.ok && settings.value?.version === 1) {
         setProvider(settings.value.activeProvider)
         setProfiles({ ...defaultProfiles(), ...settings.value.providers })
+        if (settings.value.executionMode) setExecutionMode(settings.value.executionMode)
+        if (settings.value.conversationMode) setConversationMode(settings.value.conversationMode)
         const savedModel = settings.value.providers[settings.value.activeProvider]?.model
         if (savedModel) setModelOptions((current) => ({ ...current, [settings.value!.activeProvider]: [savedModel] }))
       } else if (!settings.ok) setStatus(settings.error)
@@ -70,13 +72,13 @@ export function ApiVaultView() {
   useEffect(() => {
     if (!settingsLoaded) return
     const timer = window.setTimeout(() => {
-      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles }
+      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode }
       void window.autoPrompt.saveApiVaultSettings(settings).then((result) => {
         if (!result.ok) setStatus(`Settings were not saved: ${result.error}`)
       })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [provider, profiles, settingsLoaded])
+  }, [provider, profiles, executionMode, conversationMode, settingsLoaded])
 
   const changeProvider = (value: ApiProvider) => {
     setProvider(value)

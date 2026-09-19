@@ -63,6 +63,8 @@ export type ApiVaultSettings = {
   version: 1
   activeProvider: ApiProvider
   providers: Record<ApiProvider, ApiVaultProviderSettings>
+  executionMode?: ApiExecutionMode
+  conversationMode?: ConversationMode
 }
 
 export const REASONING_LEVELS: ReadonlyArray<{ value: ReasoningLevel; label: string }> = [
