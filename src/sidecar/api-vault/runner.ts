@@ -266,6 +266,16 @@ async function saveThread(dataDirectory: string, id: string, messages: Message[]
   await writeFile(join(directory, `${id}.json`), JSON.stringify({ id, title, updatedAt: new Date().toISOString(), messages }, null, 2), "utf8")
 }
 
+function messagesForExecutionMode(messages: Message[], executionMode: ApiVaultRequest["executionMode"]): Message[] {
+  if (executionMode === "agent") return messages
+  return messages.flatMap((message) => {
+    if (message.role === "tool") return []
+    if (message.role !== "assistant") return [message]
+    const content = assistantText(message.content)
+    return content.trim() ? [{ role: "assistant" as const, content }] : []
+  })
+}
+
 export async function listApiVaultConversations(installDirectory: string): Promise<ApiVaultConversation[]> {
   const directory = resolve(installDirectory, "data", "api-vault", "conversations")
   let entries: string[]
@@ -315,7 +325,10 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   const thread = await loadThread(dataDirectory, request)
-  const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
+  const messages: Message[] = messagesForExecutionMode(
+    thread.messages.filter((message) => message.role !== "system"),
+    request.executionMode,
+  )
   if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
@@ -343,7 +356,7 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
     const toolCalls = message.tool_calls || []
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
     if (!toolCalls.length) { finalText = assistantText(message.content); break }
-    if (request.executionMode !== "agent") throw new Error("Provider requested tools while Prompt mode was selected.")
+    if (request.executionMode !== "agent") throw new Error("The provider requested an Agent tool, but Execution mode is Prompt. Switch to Agent and run again.")
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Agent exceeded ${MAX_TOOL_ROUNDS} tool rounds.`)
     for (const call of toolCalls) {
       calls += 1
