@@ -100,7 +100,7 @@ describe("API Vault agent loop", () => {
     expect(await listApiVaultConversations(install)).toEqual([])
   })
 
-  it("removes saved Agent tool messages when a conversation continues in Prompt mode", async () => {
+  it("runs Prompt tools from an Agent conversation branch without changing saved history", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-mode-"))
     const requestBodies: Array<{ tools?: unknown[]; messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown }> }> = []
     let requestCount = 0
@@ -115,7 +115,12 @@ describe("API Vault agent loop", () => {
       if (requestCount === 2) {
         return new Response(JSON.stringify({ id: "agent-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved answer.json." } }] }), { status: 200, headers: { "content-type": "application/json" } })
       }
-      return new Response(JSON.stringify({ id: "prompt-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Direct answer." } }] }), { status: 200, headers: { "content-type": "application/json" } })
+      if (requestCount === 3) {
+        return new Response(JSON.stringify({
+          id: "prompt-tool", model: "test-model", choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "call-2", type: "function", function: { name: "write_json_file", arguments: JSON.stringify({ path: "branch.json", content: { branch: true } }) } }] } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ id: "prompt-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved branch.json." } }] }), { status: 200, headers: { "content-type": "application/json" } })
     }))
     const base: ApiVaultRequest = {
       provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
@@ -123,11 +128,14 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "Save the answer as answer.json", assets: [],
     }
     const first = await runApiVault(install, base)
-    const second = await runApiVault(install, { ...base, executionMode: "prompt", threadId: first.threadId, prompt: "Summarize it" })
-    expect(second.text).toBe("Direct answer.")
-    expect(requestBodies[2].tools).toBeUndefined()
-    expect(requestBodies[2].messages?.map((message) => message.role)).toEqual(["user", "assistant", "user"])
-    expect(requestBodies[2].messages?.some((message) => message.role === "tool" || message.tool_calls)).toBe(false)
+    const second = await runApiVault(install, { ...base, executionMode: "prompt", threadId: first.threadId, prompt: "Save this branch as branch.json" })
+    expect(second.text).toBe("Saved branch.json.")
+    expect(second.threadId).toBe(first.threadId)
+    expect(await readFile(path.join(install, ".agents", "branch.json"), "utf8")).toBe(JSON.stringify({ branch: true }, null, 2))
+    expect(requestBodies[2].tools?.length).toBeGreaterThan(0)
+    expect(requestBodies[2].messages?.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant", "user"])
+    expect(requestBodies[2].messages?.some((message) => message.role === "tool" || message.tool_calls)).toBe(true)
+    expect(await listApiVaultConversations(install)).toMatchObject([{ id: first.threadId, turnCount: 1 }])
   })
 
   it("saves an image-generation response in the selected result folder", async () => {
