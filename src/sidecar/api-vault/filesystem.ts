@@ -45,9 +45,11 @@ function explicitPaths(prompt: string): string[] {
 export function createToolContext(installDirectory: string, prompt: string, assetPaths: string[]): ToolContext {
   const workspace = resolve(installDirectory, ".agents")
   const promptPaths = explicitPaths(prompt)
+  const explicitWriteIntent = /\b(?:save|write|export|store|simpan|tulis|ekspor|create|buat)\b/i.test(prompt)
+  const descriptiveWriteIntent = /\b(?:(?:save|write|export|store|simpan|tulis|ekspor).{0,40}(?:file|folder|directory|path|json|txt|markdown|hasil|output)|(?:create|buat).{0,30}(?:file|folder|directory|json|txt|markdown))\b/i.test(prompt)
   return {
     workspace,
-    allowWrite: /\b(?:(?:save|write|export|store|simpan|tulis|ekspor).{0,40}(?:file|folder|directory|path|json|txt|markdown|hasil|output)|(?:create|buat).{0,30}(?:file|folder|directory|json|txt|markdown))\b/i.test(prompt),
+    allowWrite: descriptiveWriteIntent || (promptPaths.length > 0 && explicitWriteIntent),
     allowOverwrite: /\b(?:overwrite|replace\s+(?:the\s+)?existing|timpa|ganti\s+file)\b/i.test(prompt),
     readGrants: [workspace, ...assetPaths.map((pathValue) => resolve(pathValue)), ...promptPaths].map((root) => ({ root, operation: "read" as const })),
     writeGrants: [workspace, ...promptPaths].map((root) => ({ root, operation: "write" as const })),
