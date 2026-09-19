@@ -266,16 +266,6 @@ async function saveThread(dataDirectory: string, id: string, messages: Message[]
   await writeFile(join(directory, `${id}.json`), JSON.stringify({ id, title, updatedAt: new Date().toISOString(), messages }, null, 2), "utf8")
 }
 
-function messagesForExecutionMode(messages: Message[], executionMode: ApiVaultRequest["executionMode"]): Message[] {
-  if (executionMode === "agent") return messages
-  return messages.flatMap((message) => {
-    if (message.role === "tool") return []
-    if (message.role !== "assistant") return [message]
-    const content = assistantText(message.content)
-    return content.trim() ? [{ role: "assistant" as const, content }] : []
-  })
-}
-
 export async function listApiVaultConversations(installDirectory: string): Promise<ApiVaultConversation[]> {
   const directory = resolve(installDirectory, "data", "api-vault", "conversations")
   let entries: string[]
@@ -325,17 +315,12 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   const thread = await loadThread(dataDirectory, request)
-  const messages: Message[] = messagesForExecutionMode(
-    thread.messages.filter((message) => message.role !== "system"),
-    request.executionMode,
-  )
+  const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
   if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
-  const tools = request.executionMode === "agent"
-    ? FILESYSTEM_TOOLS.filter((tool) => context.allowWrite || !["create_directory", "write_text_file", "write_json_file"].includes(tool.function.name))
-    : []
+  const tools = FILESYSTEM_TOOLS.filter((tool) => context.allowWrite || !["create_directory", "write_text_file", "write_json_file"].includes(tool.function.name))
   let responseId: string | undefined
   let finalText = ""
   let calls = 0
@@ -356,11 +341,10 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
     const toolCalls = message.tool_calls || []
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
     if (!toolCalls.length) { finalText = assistantText(message.content); break }
-    if (request.executionMode !== "agent") throw new Error("The provider requested an Agent tool, but Execution mode is Prompt. Switch to Agent and run again.")
-    if (round === MAX_TOOL_ROUNDS) throw new Error(`Agent exceeded ${MAX_TOOL_ROUNDS} tool rounds.`)
+    if (round === MAX_TOOL_ROUNDS) throw new Error(`Tool execution exceeded ${MAX_TOOL_ROUNDS} rounds.`)
     for (const call of toolCalls) {
       calls += 1
-      if (calls > MAX_TOOL_CALLS) throw new Error(`Agent exceeded ${MAX_TOOL_CALLS} tool calls.`)
+      if (calls > MAX_TOOL_CALLS) throw new Error(`Tool execution exceeded ${MAX_TOOL_CALLS} calls.`)
       let args: Record<string, unknown>
       try { args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown> } catch { throw new Error(`Tool ${call.function.name} returned invalid JSON arguments.`) }
       trace.push({ type: "tool", label: call.function.name, detail: typeof args.path === "string" ? args.path : "" })
@@ -377,6 +361,8 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
     }
   }
   if (!finalText.trim()) throw new Error("Provider returned an empty final response.")
-  if (request.conversationMode !== "independent") await saveThread(dataDirectory, thread.id, messages)
-  return { runId, text: finalText, responseId, model, threadId: request.conversationMode === "independent" ? undefined : thread.id, files, trace }
+  const persistsConversation = request.executionMode === "agent" && request.conversationMode !== "independent"
+  if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
+  const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
+  return { runId, text: finalText, responseId, model, threadId: persistsConversation ? thread.id : selectedThreadId, files, trace }
 }
