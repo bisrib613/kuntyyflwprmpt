@@ -5,6 +5,7 @@ export type ImageQuality = "original-1k" | "upscale-2k" | "upscale-4k"
 export type VideoQuality = "original-720p" | "upscale-1080p" | "upscale-4k" | "gif-270p"
 export type DownloadQuality = ImageQuality | VideoQuality
 export type AspectRatio = "16:9" | "4:3" | "1:1" | "3:4" | "9:16"
+export type VideoDuration = 4 | 6 | 8 | 10
 export type JobStatus = "draft" | "queued" | "submitting" | "generating" | "downloading" | "completed" | "failed" | "cancelled"
 
 export type FlowpilotAccount = {
@@ -41,6 +42,7 @@ export type RunSettings = {
   output: OutputKind
   model: string
   aspectRatio: AspectRatio
+  videoDuration: VideoDuration
   variants: 1 | 2 | 3
   quality: DownloadQuality
   autoDownload: boolean

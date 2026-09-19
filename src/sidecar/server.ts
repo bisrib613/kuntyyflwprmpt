@@ -7,6 +7,7 @@ import { logAutomation, logCrash, logDirectory } from "./logger.js"
 import type { ApiVaultRequest } from "../shared/api-vault.js"
 import { listApiVaultModels, runApiVault } from "./api-vault/runner.js"
 import type { ApiProvider } from "../shared/api-vault.js"
+import { videoSettingsError } from "../shared/video-settings.js"
 
 const tokenIndex = process.argv.indexOf("--token")
 const token = tokenIndex >= 0 ? process.argv[tokenIndex + 1] : ""
@@ -73,6 +74,11 @@ async function request(method: string, params: unknown): Promise<unknown> {
       if (!settings || !runner || connectedAccountId !== settings.accountId) throw new Error("The selected FlowPilot session was not prepared. Start the queue again.")
       if (runner.isRunning) throw new Error("A queue is already running for this session.")
       if (!settings.jobs.length || settings.jobs.some((job) => !job.prompt.trim())) throw new Error("Every job requires a prompt.")
+      if (settings.output === "video") {
+        const hasAssets = settings.jobs.some((job) => job.assets.length > 0)
+        const configurationError = videoSettingsError(settings.model, settings.videoDuration, hasAssets)
+        if (configurationError) throw new Error(configurationError)
+      }
       const activeRunner = runner
       logAutomation("queue.start.accepted", { accountId: settings.accountId, projectMode: settings.projectMode, jobCount: settings.jobs.length })
       void activeRunner.run(settings).catch(async (error) => {

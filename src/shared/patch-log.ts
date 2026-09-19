@@ -5,6 +5,8 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Prevent Google Flow's open asset overlay from blocking the picker trigger during asset reuse.",
+  "Add native video-duration controls with model- and ingredient-aware 4s, 6s, 8s, and 10s options.",
   "Keep Text and JSON results in a bounded scrollable panel with Copy and Save result actions.",
   "Allow Text and JSON runs without a selected result folder, even when Auto-save was enabled accidentally.",
   "Save completed Text and JSON responses later without repeating the provider request.",
