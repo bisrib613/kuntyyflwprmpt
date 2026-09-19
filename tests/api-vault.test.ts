@@ -4,7 +4,7 @@ import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { routedModel, type ApiVaultRequest } from "../src/shared/api-vault"
 import { createToolContext, executeFilesystemTool, resolveToolPath } from "../src/sidecar/api-vault/filesystem"
-import { runApiVault } from "../src/sidecar/api-vault/runner"
+import { deleteApiVaultConversation, listApiVaultConversations, runApiVault } from "../src/sidecar/api-vault/runner"
 
 describe("API Vault reasoning", () => {
   it("uses the documented 9Router model suffix without stacking suffixes", () => {
@@ -59,6 +59,45 @@ describe("API Vault agent loop", () => {
     expect(result.files).toEqual([path.join(install, ".agents", "answer.json")])
     expect(JSON.parse(await readFile(result.files[0], "utf8"))).toEqual({ answer: 42 })
     expect(requestCount).toBe(2)
+  })
+
+  it("extracts structured text content instead of rendering a blank result", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-parts-"))
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      id: "parts", model: "test-model", choices: [{ message: { role: "assistant", content: [{ type: "text", text: "Second answer" }] } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "independent",
+      systemInstruction: "", prompt: "Second prompt", assets: [],
+    }
+    expect((await runApiVault(install, request)).text).toBe("Second answer")
+  })
+
+  it("continues, lists, and deletes a locally saved conversation", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-thread-"))
+    const requestBodies: Array<{ messages?: Array<{ role?: string; content?: unknown }> }> = []
+    let requestCount = 0
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)))
+      requestCount += 1
+      return new Response(JSON.stringify({
+        id: `response-${requestCount}`, model: "test-model", choices: [{ message: { role: "assistant", content: requestCount === 1 ? "First answer" : "Second answer" } }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+    const base: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "continue",
+      systemInstruction: "Stay concise", prompt: "First prompt", assets: [],
+    }
+    const first = await runApiVault(install, base)
+    const second = await runApiVault(install, { ...base, threadId: first.threadId, prompt: "Second prompt" })
+    expect(second.text).toBe("Second answer")
+    expect(requestBodies[1].messages?.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"])
+    const conversations = await listApiVaultConversations(install)
+    expect(conversations).toMatchObject([{ id: first.threadId, title: "First prompt", turnCount: 2 }])
+    await deleteApiVaultConversation(install, first.threadId!)
+    expect(await listApiVaultConversations(install)).toEqual([])
   })
 
   it("saves an image-generation response in the selected result folder", async () => {

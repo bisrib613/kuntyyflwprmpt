@@ -5,6 +5,10 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Always show the latest API Vault result, or the provider's real error when a run produces no output.",
+  "Read structured assistant text parts returned by OpenAI-compatible providers instead of displaying a blank result.",
+  "Add New, Load, and Delete controls for locally saved API Vault conversations.",
+  "Remember endpoint, API key, model, fallback model, and reasoning per provider with Windows-protected API keys.",
   "Prevent Google Flow's open asset overlay from blocking the picker trigger during asset reuse.",
   "Add native video-duration controls with model- and ingredient-aware 4s, 6s, 8s, and 10s options.",
   "Keep Text and JSON results in a bounded scrollable panel with Copy and Save result actions.",

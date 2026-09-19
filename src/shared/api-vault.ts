@@ -44,6 +44,27 @@ export type ApiVaultResponse = {
   trace: AgentTraceEntry[]
 }
 
+export type ApiVaultConversation = {
+  id: string
+  title: string
+  updatedAt: string
+  turnCount: number
+}
+
+export type ApiVaultProviderSettings = {
+  endpoint: string
+  apiKey: string
+  model: string
+  fallbackModel: string
+  reasoning: ReasoningLevel
+}
+
+export type ApiVaultSettings = {
+  version: 1
+  activeProvider: ApiProvider
+  providers: Record<ApiProvider, ApiVaultProviderSettings>
+}
+
 export const REASONING_LEVELS: ReadonlyArray<{ value: ReasoningLevel; label: string }> = [
   { value: "default", label: "Default" },
   { value: "low", label: "Low" },

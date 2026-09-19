@@ -5,7 +5,7 @@ import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
 import type { ApiVaultRequest } from "../shared/api-vault.js"
-import { listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
 import type { ApiProvider } from "../shared/api-vault.js"
 import { videoSettingsError } from "../shared/video-settings.js"
 
@@ -114,6 +114,13 @@ async function request(method: string, params: unknown): Promise<unknown> {
       const apiKey = typeof input.apiKey === "string" ? input.apiKey : ""
       if (!["gemini", "openai", "9router", "custom"].includes(provider) || !endpoint) throw new Error("Provider and endpoint are required to list models.")
       return listApiVaultModels(provider, endpoint, apiKey)
+    }
+    case "api-vault:conversations:list":
+      return listApiVaultConversations(installDirectory)
+    case "api-vault:conversations:delete": {
+      const id = typeof input.id === "string" ? input.id : ""
+      await deleteApiVaultConversation(installDirectory, id)
+      return null
     }
     default:
       throw new Error(`Unsupported sidecar method: ${method}`)

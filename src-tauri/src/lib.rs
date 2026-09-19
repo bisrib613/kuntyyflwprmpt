@@ -10,6 +10,9 @@ use std::{
 };
 use tauri::Manager;
 
+#[cfg(windows)]
+use std::ffi::c_void;
+
 const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
 struct AutomationState {
@@ -75,6 +78,88 @@ fn install_directory() -> Result<PathBuf, String> {
         .parent()
         .map(std::path::Path::to_path_buf)
         .ok_or_else(|| "Application installation directory is unavailable.".to_string())
+}
+
+fn api_vault_settings_path() -> Result<PathBuf, String> {
+    Ok(install_directory()?.join("data").join("api-vault").join("settings.json"))
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct DataBlob {
+    cb_data: u32,
+    pb_data: *mut u8,
+}
+
+#[cfg(windows)]
+#[link(name = "Crypt32")]
+extern "system" {
+    fn CryptProtectData(input: *const DataBlob, description: *const u16, entropy: *const DataBlob, reserved: *mut c_void, prompt: *const c_void, flags: u32, output: *mut DataBlob) -> i32;
+    fn CryptUnprotectData(input: *const DataBlob, description: *mut *mut u16, entropy: *const DataBlob, reserved: *mut c_void, prompt: *const c_void, flags: u32, output: *mut DataBlob) -> i32;
+}
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+extern "system" {
+    fn LocalFree(memory: *mut c_void) -> *mut c_void;
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
+    if value.len() % 2 != 0 { return Err("Encrypted API key is invalid.".to_string()); }
+    (0..value.len()).step_by(2).map(|index| u8::from_str_radix(&value[index..index + 2], 16)
+        .map_err(|_| "Encrypted API key is invalid.".to_string())).collect()
+}
+
+#[cfg(windows)]
+fn protect_secret(secret: &str) -> Result<String, String> {
+    if secret.is_empty() { return Ok(String::new()); }
+    let mut input_bytes = secret.as_bytes().to_vec();
+    let input = DataBlob { cb_data: input_bytes.len() as u32, pb_data: input_bytes.as_mut_ptr() };
+    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+    let result = unsafe { CryptProtectData(&input, std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null(), 1, &mut output) };
+    if result == 0 { return Err(format!("Windows could not protect the API key: {}", std::io::Error::last_os_error())); }
+    let protected = unsafe { std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec() };
+    unsafe { LocalFree(output.pb_data.cast()); }
+    Ok(hex_encode(&protected))
+}
+
+#[cfg(windows)]
+fn unprotect_secret(ciphertext: &str) -> Result<String, String> {
+    if ciphertext.is_empty() { return Ok(String::new()); }
+    let mut encrypted = hex_decode(ciphertext)?;
+    let input = DataBlob { cb_data: encrypted.len() as u32, pb_data: encrypted.as_mut_ptr() };
+    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
+    let result = unsafe { CryptUnprotectData(&input, std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null(), 1, &mut output) };
+    if result == 0 { return Err(format!("Windows could not unlock the saved API key: {}", std::io::Error::last_os_error())); }
+    let plaintext = unsafe { std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec() };
+    unsafe { LocalFree(output.pb_data.cast()); }
+    String::from_utf8(plaintext).map_err(|_| "Saved API key is not valid UTF-8.".to_string())
+}
+
+#[cfg(not(windows))]
+fn protect_secret(_secret: &str) -> Result<String, String> { Err("Secure API key storage is available on Windows only.".to_string()) }
+
+#[cfg(not(windows))]
+fn unprotect_secret(_ciphertext: &str) -> Result<String, String> { Err("Secure API key storage is available on Windows only.".to_string()) }
+
+fn transform_api_keys(settings: &mut Value, protect: bool) -> Result<(), String> {
+    let providers = settings.get_mut("providers").and_then(Value::as_object_mut)
+        .ok_or_else(|| "API Vault settings are invalid.".to_string())?;
+    for provider in providers.values_mut() {
+        let values = provider.as_object_mut().ok_or_else(|| "API Vault provider settings are invalid.".to_string())?;
+        if protect {
+            let api_key = values.remove("apiKey").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+            values.insert("apiKeyProtected".to_string(), Value::String(protect_secret(&api_key)?));
+        } else {
+            let ciphertext = values.remove("apiKeyProtected").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+            values.insert("apiKey".to_string(), Value::String(unprotect_secret(&ciphertext)?));
+        }
+    }
+    Ok(())
 }
 
 fn log_directory() -> Result<PathBuf, String> {
@@ -495,6 +580,40 @@ fn save_api_vault_result(directory: String, filename: String, content: String, f
 }
 
 #[tauri::command]
+fn load_api_vault_settings() -> Result<Option<Value>, String> {
+    let path = api_vault_settings_path()?;
+    if !path.is_file() { return Ok(None); }
+    let bytes = fs::read(&path).map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
+    if bytes.len() > 256 * 1024 { return Err("API Vault settings exceed 256 KiB.".to_string()); }
+    let mut settings: Value = serde_json::from_slice(&bytes).map_err(|error| format!("API Vault settings are invalid: {error}"))?;
+    transform_api_keys(&mut settings, false)?;
+    Ok(Some(settings))
+}
+
+#[tauri::command]
+fn save_api_vault_settings(mut settings: Value) -> Result<(), String> {
+    transform_api_keys(&mut settings, true)?;
+    let content = serde_json::to_vec_pretty(&settings).map_err(|error| error.to_string())?;
+    if content.len() > 256 * 1024 { return Err("API Vault settings exceed 256 KiB.".to_string()); }
+    let path = api_vault_settings_path()?;
+    let directory = path.parent().ok_or_else(|| "API Vault data directory is unavailable.".to_string())?;
+    fs::create_dir_all(directory).map_err(|error| format!("Unable to create {}: {error}", directory.display()))?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, content).map_err(|error| format!("Unable to write {}: {error}", temporary.display()))?;
+    let backup = path.with_extension("json.backup");
+    if path.exists() {
+        let _ = fs::remove_file(&backup);
+        fs::rename(&path, &backup).map_err(|error| format!("Unable to prepare {} for replacement: {error}", path.display()))?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.exists() { let _ = fs::rename(&backup, &path); }
+        return Err(format!("Unable to replace {}: {error}", path.display()));
+    }
+    let _ = fs::remove_file(backup);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_log_directory() -> Result<String, String> {
     Ok(command_path(log_directory()?))
 }
@@ -559,6 +678,8 @@ pub fn run() {
             sidecar_request,
             read_prompt_file,
             save_api_vault_result,
+            load_api_vault_settings,
+            save_api_vault_settings,
             prepare_flowpilot_session,
             get_log_directory,
             open_log_directory,
