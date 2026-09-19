@@ -88,7 +88,7 @@ describe("API Vault agent loop", () => {
     const base: ApiVaultRequest = {
       provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
       reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "continue",
-      systemInstruction: "Stay concise", prompt: "First prompt", assets: [],
+      systemInstruction: "Stay concise", prompt: "# **First prompt**", assets: [],
     }
     const first = await runApiVault(install, base)
     const second = await runApiVault(install, { ...base, threadId: first.threadId, prompt: "Second prompt" })
