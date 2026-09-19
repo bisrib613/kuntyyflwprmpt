@@ -582,8 +582,9 @@ fn save_api_vault_result(directory: String, filename: String, content: String, f
 #[tauri::command]
 fn load_api_vault_settings() -> Result<Option<Value>, String> {
     let path = api_vault_settings_path()?;
-    if !path.is_file() { return Ok(None); }
-    let bytes = fs::read(&path).map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
+    let backup = path.with_extension("json.backup");
+    let source = if path.is_file() { &path } else if backup.is_file() { &backup } else { return Ok(None); };
+    let bytes = fs::read(source).map_err(|error| format!("Unable to read {}: {error}", source.display()))?;
     if bytes.len() > 256 * 1024 { return Err("API Vault settings exceed 256 KiB.".to_string()); }
     let mut settings: Value = serde_json::from_slice(&bytes).map_err(|error| format!("API Vault settings are invalid: {error}"))?;
     transform_api_keys(&mut settings, false)?;

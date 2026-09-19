@@ -81,7 +81,7 @@ export function ApiVaultView() {
   const changeProvider = (value: ApiProvider) => {
     setProvider(value)
     const nextModel = profiles[value].model
-    setCustomModel(Boolean(nextModel) && !modelOptions[value].includes(nextModel))
+    setCustomModel(!nextModel || !modelOptions[value].includes(nextModel))
   }
 
   const refreshModels = async () => {
