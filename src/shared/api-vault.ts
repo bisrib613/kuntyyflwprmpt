@@ -12,6 +12,7 @@ export type ApiVaultAsset = {
 }
 
 export type ApiVaultRequest = {
+  runId?: string
   provider: ApiProvider
   endpoint: string
   apiKey: string
@@ -26,6 +27,14 @@ export type ApiVaultRequest = {
   systemInstruction: string
   prompt: string
   assets: ApiVaultAsset[]
+}
+
+export type ApiVaultProgressEvent = {
+  runId: string
+  phase: "thinking" | "assistant" | "tool-started" | "tool-succeeded" | "tool-failed" | "completed" | "failed"
+  message: string
+  tool?: string
+  file?: string
 }
 
 export type AgentTraceEntry = {

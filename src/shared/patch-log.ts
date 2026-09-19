@@ -5,6 +5,10 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Show live API Vault activity from actual provider and filesystem-tool events instead of simulated progress.",
+  "Keep saved file contents out of the result panel after successful writes unless the current prompt explicitly requests inline content.",
+  "Report real file read, inspection, creation, write, completion, and failure outcomes in both Prompt and Agent modes.",
+  "Keep Prompt runs tool-enabled and unsaved while allowing a selected Agent conversation to provide branch context.",
   "Render Markdown responses with headings, lists, tables, emphasis, and fenced code blocks while preserving a Raw view.",
   "Keep model-provided HTML disabled and automatically prefer Raw view for JSON and non-Markdown results.",
   "Remove Markdown formatting from new and existing API Vault conversation titles without altering saved prompts.",

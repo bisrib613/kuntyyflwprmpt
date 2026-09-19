@@ -1,4 +1,4 @@
-import type { ApiVaultAsset, ApiVaultConversation, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings } from "./api-vault.js"
+import type { ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings } from "./api-vault.js"
 
 export type OutputKind = "image" | "video"
 export type ImageQuality = "original-1k" | "upscale-2k" | "upscale-4k"
@@ -81,6 +81,7 @@ export type AutoPromptApi = {
   pickApiVaultAssets(): Promise<ApiResult<ApiVaultAsset[]>>
   pickApiVaultTextFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   runApiVault(request: ApiVaultRequest): Promise<ApiResult<ApiVaultResponse>>
+  onApiVaultProgress(listener: (event: ApiVaultProgressEvent) => void): () => void
   listApiVaultConversations(): Promise<ApiResult<ApiVaultConversation[]>>
   deleteApiVaultConversation(id: string): Promise<ApiResult<void>>
   loadApiVaultSettings(): Promise<ApiResult<ApiVaultSettings | null>>
