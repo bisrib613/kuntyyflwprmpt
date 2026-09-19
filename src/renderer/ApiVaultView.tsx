@@ -218,7 +218,9 @@ export function ApiVaultView() {
         <label>Conversation <span className="optional">Blank starts new</span><select value={threadId} disabled={running} onChange={(event) => { setThreadId(event.target.value); setResponse(null); setRunError("") }}><option value="">New conversation</option>{conversations.map((item) => <option value={item.id} key={item.id}>{item.title} · {item.turnCount} turn{item.turnCount === 1 ? "" : "s"}</option>)}</select></label>
         <div className="conversation-actions"><button className="secondary" disabled={running || !threadId} onClick={newConversation}>New</button><button className="danger-button" disabled={running || !threadId} onClick={() => void deleteConversation()}>Delete</button></div>
       </div>}
-      {executionMode === "agent" && <p className="field-help">Agent tools manage files in the installation's <code>.agents</code> workspace.</p>}
+      <p className="field-help">{executionMode === "agent"
+        ? <>Agent uses tools and saves each completed turn to the selected conversation.</>
+        : <>Prompt uses tools in an unsaved branch. A selected conversation is loaded as its starting context.</>}</p>
     </aside>
 
     <section className="vault-workspace">
@@ -232,7 +234,7 @@ export function ApiVaultView() {
         <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div>
       </article>
       {runError && <article className="vault-response vault-response-error" role="alert"><div className="vault-response-head"><div><strong>Run failed</strong><span>Provider / agent error</span></div></div><pre>{runError}</pre></article>}
-      {response && <article className="vault-response" key={response.runId}><div className="vault-response-head"><div><strong>Latest result</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div><div className="result-actions"><button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>{outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}</div></div><pre>{response.text}</pre>{response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}{response.trace.length > 0 && <details><summary>Agent trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}</article>}
+      {response && <article className="vault-response" key={response.runId}><div className="vault-response-head"><div><strong>Latest result</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div><div className="result-actions"><button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>{outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}</div></div><pre>{response.text}</pre>{response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}{response.trace.length > 0 && <details><summary>Tool trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}</article>}
     </section>
 
     <aside className="vault-run">
