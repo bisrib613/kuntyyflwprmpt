@@ -202,17 +202,37 @@ Command names such as `/mode agent`, `/mode prompt`, `/new`, and `/conversations
 
 Desktop and Telegram share one canonical conversation store. Each authorized Telegram chat maps to an explicit local user/chat identity, active conversation ID, and execution mode; Telegram message IDs are not treated as model session IDs.
 
+### Pairing
+
+Telegram setup is performed locally from **Settings → Telegram**:
+
+1. The user enters the BotFather token directly in the application.
+2. The application validates it with Bot API `getMe` and displays the returned bot name, username, and numeric bot ID.
+3. The user starts a short-lived pairing window.
+4. During that window, the user sends `/start` or the displayed one-time pairing command to the bot in a private chat.
+5. The desktop application displays the candidate Telegram account and numeric user/chat IDs.
+6. Nothing is authorized until the user explicitly approves that candidate on desktop.
+7. The approved identity is stored in the local allowlist.
+
+A `/start` message sent before an active pairing window is not authorization and must not be replayed later. If pairing is implemented with a code, the code is single-use, expires, and is never accepted from a group chat.
+
+The bot username is discovered through `getMe`, not hardcoded in the runtime. This allows the user to replace the bot or rotate its token without changing application code.
+
 ### Runtime and security
 
-- The Telegram bot service executes locally and calls the same runtime used by desktop.
+- Version 0.5.x supports private chats only. Group, supergroup, and channel updates are rejected even if BotFather group access is accidentally enabled.
+- The Telegram transport uses Bot API long polling; it requires no public domain, webhook, Telegram `api_id`, `api_hash`, phone-number session, or bundled Telegram client.
+- Only one Kuntyy AutoPrompt runtime may poll a bot token at a time. Update offsets are persisted so handled messages are not replayed after restart.
+- The bot service executes locally and calls the same runtime used by desktop.
 - For 0.5.x it runs while the Kuntyy AutoPrompt runtime is active; background service/startup behavior is deferred.
-- Bot token is encrypted in secure application storage.
-- Access is denied unless the Telegram chat/user ID is allowlisted.
-- Tokens, API keys, prompt contents, and attachment contents are not written to logs.
+- The bot token is encrypted using OS-backed secure storage and is masked after saving. Disconnecting removes the local token and stops polling.
+- Access is denied unless both the Telegram user ID and private-chat ID match an approved local pairing.
+- Tokens, API keys, prompt contents, one-time pairing codes, and attachment contents are not written to logs.
 - Incoming attachments are copied into a controlled local inbox before tools can access them.
-- The bot itself receives no Windows filesystem permission; all access passes through the local tool policy.
+- Telegram transport code has no direct filesystem tools; every read or write passes through the same local authorization policy as desktop.
 - High-risk or destructive operations require explicit inline approval. Persistent folder approval remains desktop-only.
-- Telegram cannot bypass path validation, tool limits, cancellation, or provider restrictions.
+- Telegram cannot bypass path validation, tool limits, cancellation, provider restrictions, or execution-mode persistence rules.
+- Long reports are sent as bounded message chunks or files because Telegram message limits must not truncate the result silently.
 
 ### 1.0.0 Telegram extension
 
@@ -331,8 +351,13 @@ The visible output area contains a concise progress/final report. Code or long g
 - Agent mode completes a tool-call round trip and can create a JSON file in `.agents`.
 - A relative write cannot escape `.agents` through `..`, symlinks, or junctions.
 - An external write is rejected unless the direct user prompt names that destination.
-- An unauthorized Telegram chat cannot invoke the runtime.
+- An invalid bot token fails `getMe` validation without being saved as connected.
+- A `/start` message outside the active pairing window cannot authorize or replay an identity.
+- Group, supergroup, and channel messages cannot invoke the runtime.
+- An unauthorized private chat cannot invoke the runtime.
+- Pairing requires explicit desktop approval and records both Telegram user ID and private-chat ID.
 - Telegram can load a conversation, switch execution mode, run, receive artifacts, and stop.
+- Restarting the application does not replay already handled Telegram updates.
 - Telegram never receives or logs provider secrets.
 
 ### Regression
