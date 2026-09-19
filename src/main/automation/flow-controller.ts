@@ -103,7 +103,7 @@ export class FlowController {
   }
 
   async configure(settings: RunSettings): Promise<void> {
-    logAutomation("flow.configure.start", { output: settings.output, model: settings.model, aspectRatio: settings.aspectRatio, variants: settings.variants })
+    logAutomation("flow.configure.start", { output: settings.output, model: settings.model, aspectRatio: settings.aspectRatio, videoDuration: settings.output === "video" ? settings.videoDuration : undefined, variants: settings.variants })
     const settingsTrigger = this.page.locator(flowSelectors.settings)
     await settingsTrigger.click()
 
@@ -122,6 +122,11 @@ export class FlowController {
       await modelMenu.getByRole("menuitem", { name: new RegExp(`${escapeRegExp(settings.model)}$`) }).click()
       await this.page.locator(flowSelectors.settingsBackdrop).waitFor({ state: "hidden" })
     }
+    if (settings.output === "video") {
+      const duration = settingsOverlay.getByRole("radio", { name: new RegExp(`^${settings.videoDuration}\\s*(?:s|sec(?:ond)?s?)\\b`, "i") })
+      if (!await duration.count()) throw new Error(`Google Flow did not expose the ${settings.videoDuration}s video duration for ${settings.model}.`)
+      await this.selectRadio(duration)
+    }
     await this.selectRadio(settingsOverlay.getByRole("radio", { name: `x${settings.variants}`, exact: true }))
     await this.page.keyboard.press("Escape")
     await settingsOverlay.waitFor({ state: "hidden" })
@@ -131,6 +136,47 @@ export class FlowController {
   private async selectRadio(radio: Locator): Promise<void> {
     await radio.waitFor({ state: "visible" })
     if ((await radio.getAttribute("aria-checked")) !== "true") await radio.click()
+  }
+
+  private assetPickerTrigger(): Locator {
+    return this.page.locator(flowSelectors.assetPicker).last()
+  }
+
+  private async waitForAssetPickerState(expanded: boolean, timeoutMs = 5_000): Promise<void> {
+    const trigger = this.assetPickerTrigger()
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const isExpanded = (await trigger.getAttribute("aria-expanded")) === "true"
+      if (isExpanded === expanded) return
+      await this.page.waitForTimeout(100)
+    }
+    throw new Error(`Google Flow asset picker did not ${expanded ? "open" : "close"}.`)
+  }
+
+  private async openAssetPicker(): Promise<void> {
+    const trigger = this.assetPickerTrigger()
+    await trigger.waitFor({ state: "visible" })
+    if ((await trigger.getAttribute("aria-expanded")) === "true") return
+    const staleBackdrop = this.page.locator(flowSelectors.assetPickerBackdrop).last()
+    if (await staleBackdrop.isVisible()) {
+      await this.page.keyboard.press("Escape")
+      await staleBackdrop.waitFor({ state: "hidden", timeout: 5_000 })
+    }
+    await trigger.click()
+    await this.waitForAssetPickerState(true)
+  }
+
+  private async closeAssetPicker(): Promise<void> {
+    const trigger = this.assetPickerTrigger()
+    if ((await trigger.getAttribute("aria-expanded")) !== "true") return
+    await this.page.keyboard.press("Escape")
+    try {
+      await this.waitForAssetPickerState(false)
+    } catch {
+      const backdrop = this.page.locator(flowSelectors.assetPickerBackdrop).last()
+      if (await backdrop.isVisible()) await backdrop.click({ position: { x: 1, y: 1 } })
+      await this.waitForAssetPickerState(false)
+    }
   }
 
   async submitJob(job: PromptJob, sharedAssets: AssetInput[]): Promise<Set<string>> {
@@ -148,16 +194,19 @@ export class FlowController {
   async prepareAssets(assets: AssetInput[]): Promise<void> {
     const missing = assets.filter((asset) => !this.assetRefs.has(asset.id))
     if (!missing.length) return
-    await this.page.locator(flowSelectors.assetPicker).click()
-    for (const asset of missing) {
-      const identity = await this.uploadOneAsset(asset)
-      this.assetRefs.set(asset.id, identity)
+    await this.openAssetPicker()
+    try {
+      for (const asset of missing) {
+        const identity = await this.uploadOneAsset(asset)
+        this.assetRefs.set(asset.id, identity)
+      }
+    } finally {
+      await this.closeAssetPicker()
     }
-    await this.page.locator(flowSelectors.assetPicker).click()
   }
 
   private async attachAssets(assets: AssetInput[]): Promise<void> {
-    await this.page.locator(flowSelectors.assetPicker).click()
+    await this.openAssetPicker()
     const wanted = new Set(assets.map((asset) => this.assetRefs.get(asset.id)).filter((identity): identity is string => Boolean(identity)))
     const options = this.page.getByRole("option")
     for (let index = 0; index < await options.count(); index += 1) {
@@ -178,6 +227,7 @@ export class FlowController {
     const add = this.page.getByRole("button", { name: /Add to prompt/i })
     await add.waitFor({ state: "visible", timeout: 30_000 })
     await add.click()
+    await this.waitForAssetPickerState(false)
   }
 
   private assetIdentity(source: string): string {

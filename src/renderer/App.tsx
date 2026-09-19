@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 import "./bridge"
-import type { AssetInput, DownloadQuality, FlowpilotAccount, OutputKind, PromptJob, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
+import type { AssetInput, DownloadQuality, FlowpilotAccount, OutputKind, PromptJob, QueueEvent, RunSettings, UpdateState, VideoDuration } from "../shared/contracts"
 import { NEXT_UPDATE_PATCHES, PATCH_LOG } from "../shared/patch-log"
 import { parsePromptFile, parsePromptText } from "../shared/prompt-file"
+import { supportedVideoDurations, videoSettingsError } from "../shared/video-settings"
 import { ApiVaultView } from "./ApiVaultView"
 
 const IMAGE_MODELS = ["Nano Banana 2 Lite", "Nano Banana 2", "Nano Banana Pro"]
@@ -40,6 +41,7 @@ export function App() {
   const [output, setOutput] = useState<OutputKind>("image")
   const [model, setModel] = useState(IMAGE_MODELS[0])
   const [ratio, setRatio] = useState<RunSettings["aspectRatio"]>("16:9")
+  const [videoDuration, setVideoDuration] = useState<VideoDuration>(8)
   const [variants, setVariants] = useState<1 | 2 | 3>(1)
   const [quality, setQuality] = useState<DownloadQuality>("original-1k")
   const [autoDownload, setAutoDownload] = useState(true)
@@ -77,7 +79,10 @@ export function App() {
   const progress = jobs.length ? Math.round(jobs.reduce((sum, job) => sum + job.progress, 0) / jobs.length) : 0
   const promptCount = jobs.reduce((sum, job) => sum + parsePromptText(job.prompt).length, 0)
   const sharedAssets = useMemo(() => jobs.flatMap((job) => job.assets.filter((asset) => asset.shared)), [jobs])
-  const canRun = Boolean(accountId) && promptCount > 0 && jobs.every((job) => parsePromptText(job.prompt).length > 0) && (!autoDownload || Boolean(downloadDirectory)) && !running
+  const hasAssets = jobs.some((job) => job.assets.length > 0)
+  const durationOptions = supportedVideoDurations(model, hasAssets)
+  const videoConfigurationError = output === "video" ? videoSettingsError(model, videoDuration, hasAssets) : null
+  const canRun = Boolean(accountId) && promptCount > 0 && jobs.every((job) => parsePromptText(job.prompt).length > 0) && (!autoDownload || Boolean(downloadDirectory)) && !videoConfigurationError && !running
 
   useEffect(() => {
     const nextModels = output === "image" ? IMAGE_MODELS : VIDEO_MODELS
@@ -85,6 +90,11 @@ export function App() {
     setQuality(output === "image" ? "original-1k" : "original-720p")
     if (output === "video" && !["16:9", "9:16"].includes(ratio)) setRatio("16:9")
   }, [output])
+
+  useEffect(() => {
+    if (output !== "video" || durationOptions.includes(videoDuration)) return
+    setVideoDuration(durationOptions[0])
+  }, [output, model, hasAssets, videoDuration])
 
   const addAssets = async (jobId: string) => {
     const result = await window.autoPrompt.pickAssets()
@@ -114,7 +124,7 @@ export function App() {
 
   const start = async () => {
     const settings: RunSettings = {
-      accountId, projectMode, newProjectName, output, model, aspectRatio: ratio, variants, quality, autoDownload, downloadDirectory,
+      accountId, projectMode, newProjectName, output, model, aspectRatio: ratio, videoDuration, variants, quality, autoDownload, downloadDirectory,
       jobs: jobs.map((job) => ({ ...job, status: "queued", progress: 0, downloads: [], error: undefined })),
     }
     setJobs(settings.jobs); setRunning(true); setMessage("Preparing the FlowPilot session and opening Google Flow…")
@@ -162,7 +172,7 @@ export function App() {
           <div className="section-heading"><span>03</span><div><h2>Output</h2><p>Native Flow settings</p></div></div>
           <div className="segmented"><button className={output === "image" ? "active" : ""} onClick={() => setOutput("image")} disabled={running}>Image</button><button className={output === "video" ? "active" : ""} onClick={() => setOutput("video")} disabled={running}>Video</button></div>
           <label>Model<select value={model} onChange={(event) => setModel(event.target.value)} disabled={running}>{models.map((value) => <option key={value}>{value}</option>)}</select></label>
-          <div className="field-row"><label>Ratio<select value={ratio} onChange={(event) => setRatio(event.target.value as RunSettings["aspectRatio"])} disabled={running}>{ratios.map((value) => <option key={value}>{value}</option>)}</select></label><label>Variants<select value={variants} onChange={(event) => setVariants(Number(event.target.value) as 1 | 2 | 3)} disabled={running}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label></div>
+          {output === "video" ? <><div className="field-row"><label>Ratio<select value={ratio} onChange={(event) => setRatio(event.target.value as RunSettings["aspectRatio"])} disabled={running}>{ratios.map((value) => <option key={value}>{value}</option>)}</select></label><label>Duration<select value={videoDuration} onChange={(event) => setVideoDuration(Number(event.target.value) as VideoDuration)} disabled={running}>{durationOptions.map((value) => <option value={value} key={value}>{value} seconds</option>)}</select></label></div><label>Variants<select value={variants} onChange={(event) => setVariants(Number(event.target.value) as 1 | 2 | 3)} disabled={running}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>{videoConfigurationError && <p className="field-warning">{videoConfigurationError}</p>}</> : <div className="field-row"><label>Ratio<select value={ratio} onChange={(event) => setRatio(event.target.value as RunSettings["aspectRatio"])} disabled={running}>{ratios.map((value) => <option key={value}>{value}</option>)}</select></label><label>Variants<select value={variants} onChange={(event) => setVariants(Number(event.target.value) as 1 | 2 | 3)} disabled={running}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label></div>}
           <label>Download quality<select value={quality} onChange={(event) => setQuality(event.target.value as DownloadQuality)} disabled={running}>{qualityOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         </section>
       </aside>
@@ -190,7 +200,7 @@ export function App() {
 
       <aside className="run-panel">
         <div><p className="eyebrow">Queue control</p><h2>Ready to run</h2><p className="run-summary">{jobs.length} job group{jobs.length === 1 ? "" : "s"} · {promptCount} prompt{promptCount === 1 ? "" : "s"}</p></div>
-        <div className="summary-grid"><div><span>Output</span><strong>{output}</strong></div><div><span>Quality</span><strong>{quality.replaceAll("-", " ")}</strong></div><div><span>Completed</span><strong>{completed}/{jobs.length}</strong></div><div><span>Progress</span><strong>{progress}%</strong></div></div>
+        <div className="summary-grid"><div><span>Output</span><strong>{output === "video" ? `Video · ${videoDuration}s` : "Image"}</strong></div><div><span>Quality</span><strong>{quality.replaceAll("-", " ")}</strong></div><div><span>Completed</span><strong>{completed}/{jobs.length}</strong></div><div><span>Progress</span><strong>{progress}%</strong></div></div>
         <label className="toggle-row"><span><strong>Auto-download</strong><small>Save each variant when ready</small></span><input type="checkbox" checked={autoDownload} disabled={running} onChange={(event) => setAutoDownload(event.target.checked)} /></label>
         {autoDownload && <div className="folder"><span>{downloadDirectory || "No download folder selected"}</span><button onClick={chooseDirectory} disabled={running}>Choose</button></div>}
         <div className="message" role="status">{message}</div>
