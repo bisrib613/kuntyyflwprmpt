@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import type { ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ConversationMode, ReasoningLevel } from "../shared/api-vault"
 import { REASONING_LEVELS } from "../shared/api-vault"
 import { parsePromptText } from "../shared/prompt-file"
@@ -10,6 +12,12 @@ const PROVIDERS: Array<{ value: ApiProvider; label: string; endpoint: string; mo
   { value: "custom", label: "Custom", endpoint: "http://localhost:8080/v1", model: "" },
 ]
 type ResultFormat = "auto" | "txt" | "json"
+type ResultView = "rendered" | "raw"
+
+function preferredResultView(text: string): ResultView {
+  try { JSON.parse(text); return "raw" } catch { /* not JSON */ }
+  return /(^|\n)\s*(?:#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```|\|.+\|)|\*\*[^*]+\*\*/m.test(text) ? "rendered" : "raw"
+}
 
 function defaultProfiles(): Record<ApiProvider, ApiVaultProviderSettings> {
   return Object.fromEntries(PROVIDERS.map((item) => [item.value, {
@@ -41,6 +49,7 @@ export function ApiVaultView() {
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState("Configure a provider and enter a prompt.")
   const [response, setResponse] = useState<ApiVaultResponse | null>(null)
+  const [resultView, setResultView] = useState<ResultView>("raw")
   const [runError, setRunError] = useState("")
   const prompts = useMemo(() => parsePromptText(prompt), [prompt])
 
@@ -179,6 +188,7 @@ export function ApiVaultView() {
         let completed = result.value
         if (outputKind === "text" && autoSaveResult && resultDirectory) completed = await saveResponse(result.value, resultDirectory) || result.value
         setResponse(completed)
+        setResultView(preferredResultView(completed.text))
         completedCount += 1
       }
       await refreshConversations()
@@ -234,7 +244,24 @@ export function ApiVaultView() {
         <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div>
       </article>
       {runError && <article className="vault-response vault-response-error" role="alert"><div className="vault-response-head"><div><strong>Run failed</strong><span>Provider / agent error</span></div></div><pre>{runError}</pre></article>}
-      {response && <article className="vault-response" key={response.runId}><div className="vault-response-head"><div><strong>Latest result</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div><div className="result-actions"><button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>{outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}</div></div><pre>{response.text}</pre>{response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}{response.trace.length > 0 && <details><summary>Tool trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}</article>}
+      {response && <article className="vault-response" key={response.runId}>
+        <div className="vault-response-head">
+          <div><strong>Latest result</strong><span>{response.model}{response.responseId ? ` · ${response.responseId}` : ""}</span></div>
+          <div className="result-actions">
+            <div className="result-view-toggle" role="group" aria-label="Result view">
+              <button className={resultView === "rendered" ? "active" : ""} onClick={() => setResultView("rendered")}>Rendered</button>
+              <button className={resultView === "raw" ? "active" : ""} onClick={() => setResultView("raw")}>Raw</button>
+            </div>
+            <button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>
+            {outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}
+          </div>
+        </div>
+        {resultView === "rendered"
+          ? <div className="markdown-result"><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{response.text}</ReactMarkdown></div>
+          : <pre className="raw-result">{response.text}</pre>}
+        {response.files.length > 0 && <div className="vault-files">{response.files.map((file) => <span key={file}>Saved · {file}</span>)}</div>}
+        {response.trace.length > 0 && <details><summary>Tool trace · {response.trace.length} events</summary>{response.trace.map((entry, traceIndex) => <p key={`${entry.label}-${traceIndex}`}><b>{entry.type}</b> · {entry.label} {entry.detail}</p>)}</details>}
+      </article>}
     </section>
 
     <aside className="vault-run">
