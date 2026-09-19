@@ -4,7 +4,7 @@ import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contra
 import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
-import type { ApiVaultRequest } from "../shared/api-vault.js"
+import type { ApiVaultProgressEvent, ApiVaultRequest } from "../shared/api-vault.js"
 import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
 import type { ApiProvider } from "../shared/api-vault.js"
 import { videoSettingsError } from "../shared/video-settings.js"
@@ -21,12 +21,21 @@ let runner: QueueRunner | null = null
 let connectedAccountId: string | null = null
 let eventCursor = 0
 const events: Array<{ cursor: number; event: QueueEvent }> = []
+let apiVaultEventCursor = 0
+const apiVaultEvents: Array<{ cursor: number; event: ApiVaultProgressEvent }> = []
 
 const emit = (event: QueueEvent): void => {
   logAutomation("queue.event", { status: event.status, jobId: event.jobId, progress: event.progress, message: event.message })
   eventCursor += 1
   events.push({ cursor: eventCursor, event })
   if (events.length > 1_000) events.splice(0, events.length - 1_000)
+}
+
+const emitApiVault = (event: ApiVaultProgressEvent): void => {
+  logAutomation("api-vault.progress", { runId: event.runId, phase: event.phase, tool: event.tool, file: event.file })
+  apiVaultEventCursor += 1
+  apiVaultEvents.push({ cursor: apiVaultEventCursor, event })
+  if (apiVaultEvents.length > 1_000) apiVaultEvents.splice(0, apiVaultEvents.length - 1_000)
 }
 
 async function closeRunner(): Promise<void> {
@@ -95,16 +104,22 @@ async function request(method: string, params: unknown): Promise<unknown> {
       const after = typeof input.after === "number" && Number.isSafeInteger(input.after) ? input.after : 0
       return { cursor: eventCursor, events: events.filter((entry) => entry.cursor > after).map((entry) => entry.event) }
     }
+    case "api-vault:events:poll": {
+      const after = typeof input.after === "number" && Number.isSafeInteger(input.after) ? input.after : 0
+      return { cursor: apiVaultEventCursor, events: apiVaultEvents.filter((entry) => entry.cursor > after).map((entry) => entry.event) }
+    }
     case "api-vault:run": {
       const settings = input.request as ApiVaultRequest | undefined
       if (!settings || typeof settings !== "object") throw new Error("API Vault request is required.")
       logAutomation("api-vault.run.start", { provider: settings.provider, model: settings.model, mode: settings.executionMode })
       try {
-        const result = await runApiVault(installDirectory, settings)
+        const result = await runApiVault(installDirectory, settings, emitApiVault)
         logAutomation("api-vault.run.complete", { provider: settings.provider, model: result.model, files: result.files.length })
         return result
       } catch (error) {
-        logAutomation("api-vault.run.failed", { provider: settings.provider, message: error instanceof Error ? error.message : String(error) })
+        const message = error instanceof Error ? error.message : String(error)
+        logAutomation("api-vault.run.failed", { provider: settings.provider, message })
+        if (settings.runId) emitApiVault({ runId: settings.runId, phase: "failed", message })
         throw error
       }
     }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { extname, isAbsolute, join, resolve } from "node:path"
-import type { AgentTraceEntry, ApiVaultConversation, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
+import type { AgentTraceEntry, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
 import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
 import { parseDocument } from "./documents.js"
@@ -15,6 +15,36 @@ const MAX_TOOL_ROUNDS = 8
 const MAX_TOOL_CALLS = 16
 const MAX_CONTEXT_CHARS = 300_000
 const TOOL_TIMEOUT_MS = 30_000
+const RUNTIME_INSTRUCTION = `You are operating inside Kuntyy AutoPrompt with local filesystem tools available in both Prompt and Agent modes.
+When the user asks to create or save files, use the tools instead of pasting the full file contents into the final response. Briefly describe useful progress before tool calls. Never claim that a file operation succeeded until its tool result confirms success. After successful writes, return a concise completion summary with saved paths. Only include full saved file contents when the current user prompt explicitly asks to display them inline.`
+
+function validRunId(value: string | undefined): value is string {
+  return Boolean(value && /^[a-zA-Z0-9_-]{1,128}$/.test(value))
+}
+
+function toolProgress(name: string, args: Record<string, unknown>, completed: boolean, file?: string): string {
+  const requested = typeof args.path === "string" && args.path.trim() ? args.path : "the workspace"
+  const target = file || requested
+  if (name === "write_text_file" || name === "write_json_file") return completed ? `Saved ${target}.` : `Writing ${requested}…`
+  if (name === "create_directory") return completed ? `Created ${target}.` : `Creating ${requested}…`
+  if (name === "read_file") return completed ? `Read ${target}.` : `Reading ${requested}…`
+  if (name === "list_directory") return completed ? `Inspected ${target}.` : `Inspecting ${requested}…`
+  if (name === "get_file_metadata") return completed ? `Inspected ${target}.` : `Inspecting ${requested}…`
+  return completed ? `${name} completed.` : `Running ${name}…`
+}
+
+function assistantProgress(content: unknown): string {
+  return assistantText(content).replace(/```[\s\S]*?```/g, "").replace(/\s+/g, " ").trim().slice(0, 1_000)
+}
+
+function explicitlyRequestsInlineContent(prompt: string): boolean {
+  return /\b(?:show|display|include|paste|print|tampilkan|sertakan|tempel|cetak)\b.{0,50}\b(?:code|content|file|kode|isi|berkas)\b/i.test(prompt)
+}
+
+function cleanFileCompletion(text: string, files: string[], prompt: string): string {
+  if (!files.length || explicitlyRequestsInlineContent(prompt) || (!/```/.test(text) && text.length <= 4_000)) return text
+  return `Completed. ${files.length} file${files.length === 1 ? "" : "s"} saved successfully:\n${files.map((file) => `- ${file}`).join("\n")}`
+}
 
 function assistantText(content: unknown): string {
   if (typeof content === "string") return content
@@ -307,13 +337,18 @@ export async function deleteApiVaultConversation(installDirectory: string, id: s
   await rm(file, { force: true })
 }
 
-export async function runApiVault(installDirectory: string, request: ApiVaultRequest): Promise<ApiVaultResponse> {
+export async function runApiVault(
+  installDirectory: string,
+  request: ApiVaultRequest,
+  onProgress: (event: ApiVaultProgressEvent) => void = () => undefined,
+): Promise<ApiVaultResponse> {
   if (!request.endpoint.trim() || !request.model.trim() || !request.prompt.trim()) throw new Error("Endpoint, model, and prompt are required.")
-  const runId = randomUUID()
+  const runId = validRunId(request.runId) ? request.runId : randomUUID()
   const trace: AgentTraceEntry[] = []
   const files: string[] = []
   let model = routedModel(request.model, request.provider, request.reasoning)
   if (request.outputKind === "image") {
+    onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
     let generated: Awaited<ReturnType<typeof runImageRequest>>
     try {
       generated = await runImageRequest(request, model)
@@ -323,11 +358,14 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
       generated = await runImageRequest(request, model)
     }
     const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
+    generatedFiles.forEach((file) => onProgress({ runId, phase: "tool-succeeded", tool: "save_image", file, message: `Saved ${file}.` }))
+    onProgress({ runId, phase: "completed", message: "Image generation completed." })
     return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   const thread = await loadThread(dataDirectory, request)
   const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
+  messages.unshift({ role: "system", content: RUNTIME_INSTRUCTION })
   if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
@@ -339,6 +377,7 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
     trace.push({ type: "provider", label: model, detail: `Request ${round + 1}` })
+    onProgress({ runId, phase: "thinking", message: round === 0 ? "Analyzing the request…" : "Continuing with the tool results…" })
     let response: OpenAiResponse
     try {
       response = request.provider === "gemini" ? await callGemini(request, messages, tools) : await callOpenAi(request, model, messages, tools)
@@ -351,6 +390,8 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
     responseId = response.id
     const message = response.choices![0].message!
     const toolCalls = message.tool_calls || []
+    const progressText = toolCalls.length ? assistantProgress(message.content) : ""
+    if (progressText) onProgress({ runId, phase: "assistant", message: progressText })
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
     if (!toolCalls.length) { finalText = assistantText(message.content); break }
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Tool execution exceeded ${MAX_TOOL_ROUNDS} rounds.`)
@@ -360,21 +401,26 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
       let args: Record<string, unknown>
       try { args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown> } catch { throw new Error(`Tool ${call.function.name} returned invalid JSON arguments.`) }
       trace.push({ type: "tool", label: call.function.name, detail: typeof args.path === "string" ? args.path : "" })
+      onProgress({ runId, phase: "tool-started", tool: call.function.name, message: toolProgress(call.function.name, args, false) })
       try {
         const result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args))
         if (result.file) files.push(result.file)
         messages.push({ role: "tool", tool_call_id: call.id, tool_name: call.function.name, content: result.content })
         trace.push({ type: "result", label: call.function.name, detail: result.content.slice(0, 500) })
+        onProgress({ runId, phase: "tool-succeeded", tool: call.function.name, file: result.file, message: toolProgress(call.function.name, args, true, result.file) })
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         messages.push({ role: "tool", tool_call_id: call.id, tool_name: call.function.name, content: JSON.stringify({ error: detail }) })
         trace.push({ type: "result", label: call.function.name, detail })
+        onProgress({ runId, phase: "tool-failed", tool: call.function.name, message: `${call.function.name} failed: ${detail}` })
       }
     }
   }
   if (!finalText.trim()) throw new Error("Provider returned an empty final response.")
+  finalText = cleanFileCompletion(finalText, files, request.prompt)
   const persistsConversation = request.executionMode === "agent" && request.conversationMode !== "independent"
   if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
   const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
+  onProgress({ runId, phase: "completed", message: files.length ? `Completed with ${files.length} saved file${files.length === 1 ? "" : "s"}.` : "Run completed." })
   return { runId, text: finalText, responseId, model, threadId: persistsConversation ? thread.id : selectedThreadId, files, trace }
 }

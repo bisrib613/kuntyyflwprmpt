@@ -4,10 +4,11 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import type { ApiResult, AssetInput, AutoPromptApi, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
-import type { ApiVaultAsset, ApiVaultConversation, ApiVaultSettings } from "../shared/api-vault"
+import type { ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultSettings } from "../shared/api-vault"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
+type ApiVaultEventBatch = { cursor: number; events: ApiVaultProgressEvent[] }
 
 const sidecar = <T>(method: string, params: Record<string, unknown> = {}): Promise<SidecarEnvelope<T>> =>
   invoke("sidecar_request", { method, params })
@@ -163,6 +164,26 @@ const api: AutoPromptApi = {
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   runApiVault: (request) => sidecar("api-vault:run", { request }),
+  onApiVaultProgress: (listener) => {
+    let cursor = 0
+    let stopped = false
+    let polling = false
+    const poll = async () => {
+      if (stopped || polling) return
+      polling = true
+      try {
+        const result = await sidecar<ApiVaultEventBatch>("api-vault:events:poll", { after: cursor })
+        if (result.ok) {
+          cursor = result.value.cursor
+          result.value.events.forEach(listener)
+        }
+      } catch { /* the active API request reports transport failures */
+      } finally { polling = false }
+    }
+    const interval = window.setInterval(() => { void poll() }, 300)
+    void poll()
+    return () => { stopped = true; window.clearInterval(interval) }
+  },
   listApiVaultConversations: () => sidecar<ApiVaultConversation[]>("api-vault:conversations:list"),
   deleteApiVaultConversation: async (id) => {
     const result = await sidecar<null>("api-vault:conversations:delete", { id })
