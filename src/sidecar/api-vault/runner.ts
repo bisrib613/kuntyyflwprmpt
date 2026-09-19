@@ -32,6 +32,18 @@ function assistantText(content: unknown): string {
   }).join("")
 }
 
+function conversationTitle(content: unknown): string {
+  return assistantText(content)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|[-*+]|\d+\.)\s+/gm, "")
+    .replace(/\*\*|__|~~|`/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "Untitled conversation"
+}
+
 async function withToolTimeout<T>(promise: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   try {
@@ -262,7 +274,7 @@ async function saveThread(dataDirectory: string, id: string, messages: Message[]
   const directory = join(dataDirectory, "conversations")
   await mkdir(directory, { recursive: true })
   const firstUser = messages.find((message) => message.role === "user")
-  const title = assistantText(firstUser?.content).replace(/\s+/g, " ").trim().slice(0, 80) || "Untitled conversation"
+  const title = conversationTitle(firstUser?.content)
   await writeFile(join(directory, `${id}.json`), JSON.stringify({ id, title, updatedAt: new Date().toISOString(), messages }, null, 2), "utf8")
 }
 
@@ -279,7 +291,7 @@ export async function listApiVaultConversations(installDirectory: string): Promi
       if (!validThreadId(parsed.id) || !Array.isArray(parsed.messages)) return null
       return {
         id: parsed.id,
-        title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim().slice(0, 80) : "Untitled conversation",
+        title: conversationTitle(parsed.title),
         updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
         turnCount: parsed.messages.filter((message) => message.role === "user").length,
       } satisfies ApiVaultConversation
