@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { extname, isAbsolute, join, resolve } from "node:path"
-import type { AgentTraceEntry, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
+import type { AgentTraceEntry, ApiVaultConversation, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
 import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
 import { parseDocument } from "./documents.js"
@@ -9,12 +9,28 @@ import { createToolContext, executeFilesystemTool, FILESYSTEM_TOOLS } from "./fi
 
 type Message = { role: "system" | "user" | "assistant" | "tool"; content: unknown; tool_calls?: ToolCall[]; tool_call_id?: string; tool_name?: string }
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } }
-type OpenAiResponse = { id?: string; model?: string; choices?: Array<{ message?: { role?: string; content?: string | null; tool_calls?: ToolCall[] } }>; error?: { message?: string } }
+type OpenAiResponse = { id?: string; model?: string; choices?: Array<{ message?: { role?: string; content?: unknown; tool_calls?: ToolCall[] } }>; error?: { message?: string } }
 
 const MAX_TOOL_ROUNDS = 8
 const MAX_TOOL_CALLS = 16
 const MAX_CONTEXT_CHARS = 300_000
 const TOOL_TIMEOUT_MS = 30_000
+
+function assistantText(content: unknown): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.flatMap((part) => {
+    if (typeof part === "string") return [part]
+    if (!part || typeof part !== "object") return []
+    const value = part as Record<string, unknown>
+    if (typeof value.text === "string") return [value.text]
+    if (value.text && typeof value.text === "object" && typeof (value.text as Record<string, unknown>).value === "string") {
+      return [(value.text as Record<string, unknown>).value as string]
+    }
+    if (typeof value.output_text === "string") return [value.output_text]
+    return []
+  }).join("")
+}
 
 async function withToolTimeout<T>(promise: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined
@@ -245,7 +261,38 @@ async function loadThread(dataDirectory: string, request: ApiVaultRequest): Prom
 async function saveThread(dataDirectory: string, id: string, messages: Message[]): Promise<void> {
   const directory = join(dataDirectory, "conversations")
   await mkdir(directory, { recursive: true })
-  await writeFile(join(directory, `${id}.json`), JSON.stringify({ id, updatedAt: new Date().toISOString(), messages }, null, 2), "utf8")
+  const firstUser = messages.find((message) => message.role === "user")
+  const title = assistantText(firstUser?.content).replace(/\s+/g, " ").trim().slice(0, 80) || "Untitled conversation"
+  await writeFile(join(directory, `${id}.json`), JSON.stringify({ id, title, updatedAt: new Date().toISOString(), messages }, null, 2), "utf8")
+}
+
+export async function listApiVaultConversations(installDirectory: string): Promise<ApiVaultConversation[]> {
+  const directory = resolve(installDirectory, "data", "api-vault", "conversations")
+  let entries: string[]
+  try { entries = await readdir(directory) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+    throw error
+  }
+  const conversations = await Promise.all(entries.filter((entry) => /^[a-zA-Z0-9_-]{1,128}\.json$/.test(entry)).map(async (entry) => {
+    try {
+      const parsed = JSON.parse(await readFile(join(directory, entry), "utf8")) as { id?: string; title?: string; updatedAt?: string; messages?: Message[] }
+      if (!validThreadId(parsed.id) || !Array.isArray(parsed.messages)) return null
+      return {
+        id: parsed.id,
+        title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim().slice(0, 80) : "Untitled conversation",
+        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+        turnCount: parsed.messages.filter((message) => message.role === "user").length,
+      } satisfies ApiVaultConversation
+    } catch { return null }
+  }))
+  return conversations.filter((item): item is ApiVaultConversation => item !== null)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+export async function deleteApiVaultConversation(installDirectory: string, id: string): Promise<void> {
+  if (!validThreadId(id)) throw new Error("Conversation id is invalid.")
+  const file = resolve(installDirectory, "data", "api-vault", "conversations", `${id}.json`)
+  await rm(file, { force: true })
 }
 
 export async function runApiVault(installDirectory: string, request: ApiVaultRequest): Promise<ApiVaultResponse> {
@@ -268,8 +315,8 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   const thread = await loadThread(dataDirectory, request)
-  const messages: Message[] = [...thread.messages]
-  if (request.systemInstruction.trim()) messages.push({ role: "system", content: request.systemInstruction.trim() })
+  const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
+  if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
@@ -295,7 +342,7 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
     const message = response.choices![0].message!
     const toolCalls = message.tool_calls || []
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
-    if (!toolCalls.length) { finalText = message.content || ""; break }
+    if (!toolCalls.length) { finalText = assistantText(message.content); break }
     if (request.executionMode !== "agent") throw new Error("Provider requested tools while Prompt mode was selected.")
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Agent exceeded ${MAX_TOOL_ROUNDS} tool rounds.`)
     for (const call of toolCalls) {
@@ -316,7 +363,7 @@ export async function runApiVault(installDirectory: string, request: ApiVaultReq
       }
     }
   }
-  if (!finalText) throw new Error("Agent finished without a final response.")
+  if (!finalText.trim()) throw new Error("Provider returned an empty final response.")
   if (request.conversationMode !== "independent") await saveThread(dataDirectory, thread.id, messages)
   return { runId, text: finalText, responseId, model, threadId: request.conversationMode === "independent" ? undefined : thread.id, files, trace }
 }

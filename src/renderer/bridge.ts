@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import type { ApiResult, AssetInput, AutoPromptApi, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
-import type { ApiVaultAsset } from "../shared/api-vault"
+import type { ApiVaultAsset, ApiVaultConversation, ApiVaultSettings } from "../shared/api-vault"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
@@ -163,6 +163,19 @@ const api: AutoPromptApi = {
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   runApiVault: (request) => sidecar("api-vault:run", { request }),
+  listApiVaultConversations: () => sidecar<ApiVaultConversation[]>("api-vault:conversations:list"),
+  deleteApiVaultConversation: async (id) => {
+    const result = await sidecar<null>("api-vault:conversations:delete", { id })
+    return result.ok ? { ok: true, value: undefined } : result
+  },
+  loadApiVaultSettings: async () => {
+    try { return { ok: true, value: await invoke<ApiVaultSettings | null>("load_api_vault_settings") } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
+  saveApiVaultSettings: async (settings) => {
+    try { await invoke("save_api_vault_settings", { settings }); return { ok: true, value: undefined } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+  },
   listApiVaultModels: (provider, endpoint, apiKey) => sidecar("api-vault:models", { provider, endpoint, apiKey }),
   saveApiVaultResult: async (directory, filename, content, format) => {
     try { return { ok: true, value: await invoke<string>("save_api_vault_result", { directory, filename, content, format }) } }
