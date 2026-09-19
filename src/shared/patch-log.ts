@@ -5,6 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Render Markdown responses with headings, lists, tables, emphasis, and fenced code blocks while preserving a Raw view.",
+  "Keep model-provided HTML disabled and automatically prefer Raw view for JSON and non-Markdown results.",
+  "Remove Markdown formatting from new and existing API Vault conversation titles without altering saved prompts.",
   "Allow Prompt mode to use the same bounded filesystem tools as Agent mode.",
   "Run Prompt mode as an unsaved branch of the selected Agent conversation while preserving its full context.",
   "Remember API Vault execution and conversation modes across application restarts and updates.",
