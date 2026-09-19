@@ -5,8 +5,9 @@ export interface PatchLogEntry {
 }
 
 export const NEXT_UPDATE_PATCHES = [
+  "Allow Prompt mode to use the same bounded filesystem tools as Agent mode.",
+  "Run Prompt mode as an unsaved branch of the selected Agent conversation while preserving its full context.",
   "Remember API Vault execution and conversation modes across application restarts and updates.",
-  "Remove saved Agent tool-call records when a conversation is intentionally continued in Prompt mode.",
   "Prevent long API Vault Agent runs from being reported as a dead automation runtime after 30 seconds.",
   "Always show the latest API Vault result, or the provider's real error when a run produces no output.",
   "Read structured assistant text parts returned by OpenAI-compatible providers instead of displaying a blank result.",
