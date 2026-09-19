@@ -100,6 +100,36 @@ describe("API Vault agent loop", () => {
     expect(await listApiVaultConversations(install)).toEqual([])
   })
 
+  it("removes saved Agent tool messages when a conversation continues in Prompt mode", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-mode-"))
+    const requestBodies: Array<{ tools?: unknown[]; messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown }> }> = []
+    let requestCount = 0
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)))
+      requestCount += 1
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({
+          id: "agent-tool", model: "test-model", choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "write_json_file", arguments: JSON.stringify({ path: "answer.json", content: { answer: 42 } }) } }] } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (requestCount === 2) {
+        return new Response(JSON.stringify({ id: "agent-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved answer.json." } }] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ id: "prompt-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Direct answer." } }] }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+    const base: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "continue",
+      systemInstruction: "", prompt: "Save the answer as answer.json", assets: [],
+    }
+    const first = await runApiVault(install, base)
+    const second = await runApiVault(install, { ...base, executionMode: "prompt", threadId: first.threadId, prompt: "Summarize it" })
+    expect(second.text).toBe("Direct answer.")
+    expect(requestBodies[2].tools).toBeUndefined()
+    expect(requestBodies[2].messages?.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+    expect(requestBodies[2].messages?.some((message) => message.role === "tool" || message.tool_calls)).toBe(false)
+  })
+
   it("saves an image-generation response in the selected result folder", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-install-"))
     const output = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-output-"))
