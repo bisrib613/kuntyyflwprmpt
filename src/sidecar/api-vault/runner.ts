@@ -129,7 +129,7 @@ function imageExtension(mime: string): string {
   throw new Error(`Unsupported image media type: ${mime}`)
 }
 
-async function imageBytes(source: string): Promise<{ bytes: Buffer; mime: string }> {
+async function imageBytes(source: string, signal?: AbortSignal): Promise<{ bytes: Buffer; mime: string }> {
   const data = source.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s)
   if (data) { const bytes = Buffer.from(data[2], "base64"); return { bytes, mime: detectedImageMime(bytes, data[1]) } }
   const url = new URL(source)
@@ -141,14 +141,14 @@ async function imageBytes(source: string): Promise<{ bytes: Buffer; mime: string
   return { bytes, mime: detectedImageMime(bytes, response.headers.get("content-type")?.split(";")[0] || "") }
 }
 
-async function saveImages(outputDirectory: string, runId: string, sources: string[]): Promise<string[]> {
+async function saveImages(outputDirectory: string, runId: string, sources: string[], signal?: AbortSignal): Promise<string[]> {
   if (!outputDirectory.trim()) throw new Error("Select an image result folder before running image output.")
   if (!isAbsolute(outputDirectory)) throw new Error("Image result folder must be an absolute path selected by the user.")
   if (sources.length > 8) throw new Error("Provider returned more than 8 images in one response.")
   await mkdir(outputDirectory, { recursive: true })
   const files: string[] = []
   for (const [index, source] of sources.entries()) {
-    const image = await imageBytes(source)
+    const image = await imageBytes(source, signal)
     if (image.bytes.byteLength > 50 * 1024 * 1024) throw new Error("Provider image exceeds 50 MiB.")
     const file = join(outputDirectory, `api-vault-${runId}-${index + 1}.${imageExtension(image.mime)}`)
     await writeFile(file, image.bytes, { flag: "wx" })
@@ -692,7 +692,7 @@ export async function runApiVault(
         model = request.fallbackModel.trim()
         generated = await runImageRequest(request, model, control.signal)
       }
-      const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
+      const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources, control.signal)
       for (const file of generatedFiles) {
         files.push(file)
         imageArtifacts.push(await observeArtifact(installDirectory, file, "created"))
@@ -789,7 +789,7 @@ export async function runApiVault(
             prompt: args.prompt, systemInstruction: "", assets: [], outputKind: "image", outputDirectory, executionMode: "independent",
           }
           const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel, control.signal), 120_000, control.signal)
-          const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources)
+          const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources, control.signal)
           saved.forEach((file) => files.push(file))
           result = { content: JSON.stringify({ generated: true, model: generated.model, files: saved, note: "The explicit image prompt was sent unchanged." }), file: saved[0] }
         } else {
