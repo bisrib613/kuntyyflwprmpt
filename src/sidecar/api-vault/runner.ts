@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
-import { extname, isAbsolute, join, relative, resolve } from "node:path"
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type { AgentTraceEntry, ApiModelCatalogItem, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
 import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
@@ -532,6 +532,14 @@ async function observeArtifact(installDirectory: string, file: string, operation
   }
 }
 
+function requiresTelegramApproval(toolName: string, args: Record<string, unknown>, workspace: string): boolean {
+  if (toolName === "edit_file") return true
+  if (["write_file", "write_text_file", "write_json_file"].includes(toolName) && args.overwrite === true) return true
+  if (!["write_file", "write_text_file", "write_json_file", "create_directory"].includes(toolName) || typeof args.path !== "string" || !isAbsolute(args.path)) return false
+  const relativePath = relative(workspace, resolve(args.path))
+  return relativePath === ".." || relativePath.startsWith(".." + sep) || isAbsolute(relativePath)
+}
+
 function validThreadId(value: string | undefined): value is string {
   return Boolean(value && /^[a-zA-Z0-9_-]{1,128}$/.test(value))
 }
@@ -717,6 +725,16 @@ export async function runApiVault(
       try { args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown> } catch { throw new Error(`Tool ${call.function.name} returned invalid JSON arguments.`) }
       trace.push({ type: "tool", label: call.function.name, detail: typeof args.path === "string" ? args.path : "" })
       onProgress({ runId, phase: "tool-started", tool: call.function.name, message: toolProgress(call.function.name, args, false) })
+      if (control.approveToolCall && requiresTelegramApproval(call.function.name, args, context.workspace)) {
+        const approved = await control.approveToolCall(call.function.name, args).catch(() => false)
+        if (!approved) {
+          const detail = "The requested operation was not approved in Telegram; no filesystem change was made."
+          messages.push({ role: "tool", tool_call_id: call.id, tool_name: call.function.name, content: JSON.stringify({ error: detail }) })
+          trace.push({ type: "result", label: call.function.name, detail })
+          onProgress({ runId, phase: "tool-failed", tool: call.function.name, message: detail })
+          continue
+        }
+      }
       try {
         let result: { content: string; file?: string }
         if (call.function.name === "web_fetch") {
