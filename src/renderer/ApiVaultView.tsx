@@ -19,6 +19,16 @@ function preferredResultView(text: string): ResultView {
   return /(^|\n)\s*(?:#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```|\|.+\|)|\*\*[^*]+\*\*/m.test(text) ? "rendered" : "raw"
 }
 
+function supportedImageRatios(provider: ApiProvider, model: string, parameters: string[] = []): Array<"auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"> {
+  const all = ["auto", "1:1", "9:16", "16:9", "2:3", "3:2"] as const
+  if (provider === "gemini") return [...all]
+  if (provider === "9router" && /antigravity/i.test(model)) return [...all]
+  if (provider === "openai" && /^gpt-image/i.test(model)) return ["auto", "1:1", "2:3", "3:2"]
+  if (parameters.includes("aspect_ratio") || parameters.includes("aspectRatio")) return [...all]
+  if (parameters.includes("size")) return ["auto", "1:1", "2:3", "3:2"]
+  return ["auto"]
+}
+
 function defaultProfiles(): Record<ApiProvider, ApiVaultProviderSettings> {
   return Object.fromEntries(PROVIDERS.map((item) => [item.value, {
     endpoint: item.endpoint, apiKey: "", model: item.model, imageModel: "", imageAspectRatio: "auto", fallbackModel: "", reasoning: "default",
@@ -42,6 +52,8 @@ export function ApiVaultView() {
   const [executionMode, setExecutionMode] = useState<"independent" | "agent">("independent")
   const [outputKind, setOutputKind] = useState<ApiOutputKind>("text")
   const selectedModel = outputKind === "image" ? imageModel : model
+  const selectedImageMetadata = modelCatalogs[provider].image.find((item) => item.id === imageModel)
+  const imageRatioOptions = supportedImageRatios(provider, imageModel, selectedImageMetadata?.supportedParameters || [])
   const [outputDirectory, setOutputDirectory] = useState("")
   const [autoSaveResult, setAutoSaveResult] = useState(false)
   const [resultDirectory, setResultDirectory] = useState("")
@@ -110,6 +122,12 @@ export function ApiVaultView() {
       setSettingsLoaded(true)
     })()
   }, [])
+
+  useEffect(() => {
+    if (outputKind === "image" && !imageRatioOptions.includes(imageAspectRatio)) {
+      setProfiles((current) => ({ ...current, [provider]: { ...current[provider], imageAspectRatio: "auto" } }))
+    }
+  }, [outputKind, provider, imageModel, imageAspectRatio, imageRatioOptions.join(",")])
 
   useEffect(() => {
     const currentSelection = outputKind === "image" ? imageModel : model
@@ -390,7 +408,7 @@ export function ApiVaultView() {
       <div className="section-heading vault-section"><span>02</span><div><h2>Runtime</h2><p>Context and tools</p></div></div>
       <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => { const value = event.target.value as ApiOutputKind; setOutputKind(value); if (value === "image") { setConversationMode("independent"); setThreadId("") } }}><option value="text">Chat</option><option value="image">Image</option></select></label>
       {outputKind === "image" && <div className="folder vault-folder"><span>{outputDirectory || "No image result folder selected"}</span><button disabled={running} onClick={() => void chooseOutputDirectory()}>Choose</button></div>}
-      {outputKind === "image" && <label>Aspect ratio<select value={imageAspectRatio} disabled={running} onChange={(event) => updateProfile({ imageAspectRatio: event.target.value as ApiVaultProviderSettings["imageAspectRatio"] })}><option value="auto">Auto</option><option value="1:1">1:1</option><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="2:3">2:3</option><option value="3:2">3:2</option></select></label>}
+      {outputKind === "image" && imageRatioOptions.length > 1 && <label>Aspect ratio<select value={imageAspectRatio} disabled={running} onChange={(event) => updateProfile({ imageAspectRatio: event.target.value as ApiVaultProviderSettings["imageAspectRatio"] })}>{imageRatioOptions.map((ratio) => <option key={ratio} value={ratio}>{ratio === "auto" ? "Auto" : ratio}</option>)}</select></label>}
       {outputKind === "text" && <div className="result-save-settings">
         <label className="toggle-row"><span><strong>Auto-save result</strong><small>Run still works when no folder is selected</small></span><input type="checkbox" checked={autoSaveResult} disabled={running} onChange={(event) => setAutoSaveResult(event.target.checked)} /></label>
         <label>File format<select value={resultFormat} disabled={running} onChange={(event) => setResultFormat(event.target.value as ResultFormat)}><option value="auto">Auto-detect</option><option value="txt">TXT</option><option value="json">JSON</option></select></label>
