@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
-import { extname, isAbsolute, join, resolve } from "node:path"
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { extname, isAbsolute, join, relative, resolve } from "node:path"
 import type { AgentTraceEntry, ApiModelCatalogItem, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
 import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
@@ -466,6 +466,60 @@ async function buildUserContent(request: ApiVaultRequest): Promise<Array<Record<
   return content
 }
 
+type AgentArtifactState = {
+  id: string
+  path: string
+  kind: "file"
+  operation: "created" | "modified"
+  status: "working" | "ready" | "error"
+  bytes: number
+  revision: number
+  updatedAt: string
+}
+
+async function persistRunState(
+  dataDirectory: string,
+  runId: string,
+  statusValue: "running" | "completed" | "failed",
+  currentStep: string,
+  iteration: number,
+  artifacts: AgentArtifactState[],
+): Promise<void> {
+  const directory = join(dataDirectory, "runs")
+  await mkdir(directory, { recursive: true })
+  const destination = join(directory, runId + ".json")
+  const temporary = join(directory, "." + runId + "." + randomUUID() + ".tmp")
+  const payload = {
+    runId,
+    status: statusValue,
+    currentStep,
+    iteration,
+    artifacts: artifacts.map((artifact) => ({
+      ...artifact,
+      status: statusValue === "completed" ? "ready" as const : statusValue === "failed" ? "error" as const : artifact.status,
+    })),
+    updatedAt: new Date().toISOString(),
+  }
+  await writeFile(temporary, JSON.stringify(payload, null, 2), { encoding: "utf8", flag: "wx" })
+  try { await rename(temporary, destination) } catch (error) { await rm(temporary, { force: true }); throw error }
+}
+
+async function observeArtifact(installDirectory: string, file: string, operation: "created" | "modified", existing?: AgentArtifactState): Promise<AgentArtifactState> {
+  const metadata = await stat(file)
+  const relativePath = relative(installDirectory, file)
+  const pathValue = !relativePath.startsWith("..") && !isAbsolute(relativePath) ? relativePath : file
+  return {
+    id: existing?.id || randomUUID(),
+    path: pathValue,
+    kind: "file",
+    operation: existing ? (existing.operation === "created" ? "created" : operation) : operation,
+    status: "working",
+    bytes: metadata.size,
+    revision: (existing?.revision || 0) + 1,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 function validThreadId(value: string | undefined): value is string {
   return Boolean(value && /^[a-zA-Z0-9_-]{1,128}$/.test(value))
 }
@@ -599,6 +653,10 @@ export async function runApiVault(
     return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
+  await mkdir(dataDirectory, { recursive: true })
+  const artifactStates: AgentArtifactState[] = []
+  let iteration = 0
+  await persistRunState(dataDirectory, runId, "running", "Preparing the primary-agent run", iteration, artifactStates)
   const thread = await loadThread(dataDirectory, request)
   const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
   if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
@@ -616,7 +674,9 @@ export async function runApiVault(
   let finalText = ""
   let calls = 0
 
+  try {
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+    iteration = round + 1
     trace.push({ type: "provider", label: model, detail: `Request ${round + 1}` })
     onProgress({ runId, phase: "thinking", message: round === 0 ? "Analyzing the request…" : "Continuing with the tool results…" })
     let response: OpenAiResponse
@@ -668,7 +728,15 @@ export async function runApiVault(
         } else {
           result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args))
         }
-        if (result.file && !files.includes(result.file)) files.push(result.file)
+        if (result.file) {
+          if (!files.includes(result.file)) files.push(result.file)
+          const existingArtifact = artifactStates.find((artifact) => resolve(installDirectory, artifact.path) === resolve(result.file!))
+          const operation = call.function.name === "edit_file" ? "modified" : "created"
+          const observed = await observeArtifact(installDirectory, result.file, operation, existingArtifact)
+          if (existingArtifact) Object.assign(existingArtifact, observed)
+          else artifactStates.push(observed)
+          await persistRunState(dataDirectory, runId, "running", "Completed tool operation: " + call.function.name, iteration, artifactStates)
+        }
         messages.push({ role: "tool", tool_call_id: call.id, tool_name: call.function.name, content: result.content })
         trace.push({ type: "result", label: call.function.name, detail: result.content.slice(0, 500) })
         onProgress({ runId, phase: "tool-succeeded", tool: call.function.name, file: result.file, message: toolProgress(call.function.name, args, true, result.file) })
@@ -680,11 +748,19 @@ export async function runApiVault(
       }
     }
   }
-  if (!finalText.trim()) throw new Error("Provider returned an empty final response.")
+  } catch (error) {
+    await persistRunState(dataDirectory, runId, "failed", "Run stopped before the requested work completed", iteration, artifactStates).catch(() => undefined)
+    throw error
+  }
+  if (!finalText.trim()) {
+    await persistRunState(dataDirectory, runId, "failed", "Provider returned an empty final response", iteration, artifactStates).catch(() => undefined)
+    throw new Error("Provider returned an empty final response.")
+  }
   finalText = cleanFileCompletion(finalText, files, request.prompt)
   const persistsConversation = request.executionMode === "agent" && request.conversationMode !== "independent"
   if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
   const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
+  await persistRunState(dataDirectory, runId, "completed", "Requested task completed", iteration, artifactStates)
   onProgress({ runId, phase: "completed", message: files.length ? `Completed with ${files.length} saved file${files.length === 1 ? "" : "s"}.` : "Run completed." })
   return { runId, text: finalText, responseId, model, threadId: persistsConversation ? thread.id : selectedThreadId, files, trace }
 }
