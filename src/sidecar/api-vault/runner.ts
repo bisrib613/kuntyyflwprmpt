@@ -97,15 +97,15 @@ function readableProviderTimeout(error: unknown, request: ApiVaultRequest): Erro
   const providerName = request.provider === "9router" ? "9Router"
     : request.provider === "openai" ? "OpenAI"
     : request.provider === "gemini" ? "Gemini"
-    : "The configured provider"
-  const operation = request.outputKind === "image" ? "Image generation" : "The model request"
+    : "configured provider"
+  const operation = request.outputKind === "image" ? `Image generation via ${providerName}` : `The model request to ${providerName}`
   const guidance = request.provider === "9router"
     ? "Make sure 9Router is running and the selected model is available, then try again."
     : request.provider === "custom"
       ? "Check the Base URL and model availability, then try again."
       : "Check the provider connection and selected model, then try again."
 
-  return new Error(`${operation} via ${providerName} timed out after 120 seconds. ${guidance}`)
+  return new Error(`${operation} timed out after 120 seconds. ${guidance}`)
 }
 
 export type ApiVaultRunControl = {
