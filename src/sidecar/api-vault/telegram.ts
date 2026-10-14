@@ -5,7 +5,6 @@ import type {
   ApiProvider,
   ApiVaultAsset,
   ApiVaultSettings,
-  ApiVaultTelegramApprovedChat,
   ApiVaultTelegramBotInfo,
   ApiVaultTelegramCandidate,
   ApiVaultTelegramStatus,
@@ -38,7 +37,6 @@ type TelegramRuntime = {
   pendingApprovals: Map<string, PendingApproval>
   pollPromise?: Promise<void>
 }
-type TelegramCallResult<T> = { result: T }
 
 let runtime: TelegramRuntime | undefined
 
@@ -141,7 +139,7 @@ async function sendText(value: TelegramRuntime, chatId: number, text: string, re
       disable_web_page_preview: true,
     }, value.controller.signal)
   } catch (error) {
-    if (!value.controller.signal.aborted) value.status.lastError = error instanceof Error ? error.message : String(error)
+    if (!value.controller.signal.aborted) value.status.lastError = (error instanceof Error ? error.message : String(error)).replaceAll(value.token, "[redacted]")
     return undefined
   }
 }
@@ -348,7 +346,8 @@ async function runRemoteMessage(value: TelegramRuntime, message: TelegramMessage
     await sendLongText(value, chatId, report)
     for (const file of result.files.slice(0, 8)) await sendArtifact(value, chatId, file)
   } catch (error) {
-    const messageText = controller.signal.aborted ? "Run stopped." : "Run failed: " + (error instanceof Error ? error.message : String(error))
+    const detail = (error instanceof Error ? error.message : String(error)).replaceAll(value.token, "[redacted]")
+    const messageText = controller.signal.aborted ? "Run stopped." : "Run failed: " + detail
     await sendText(value, chatId, messageText)
   } finally {
     value.activeRuns.delete(key)
