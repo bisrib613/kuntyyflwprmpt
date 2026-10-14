@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, mkdir, readdir, realpath, rename, stat, writeFile } from "node:fs/promises"
+import { access, mkdir, readFile as readTextFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { parseDocument } from "./documents.js"
@@ -106,7 +106,22 @@ export async function executeFilesystemTool(context: ToolContext, name: string, 
     const target = await resolveToolPath(context, requested, "read")
     return { content: await parseDocument(target) }
   }
-  if (name === "write_text_file" || name === "write_json_file") {
+  if (name === "edit_file") {
+    const target = await resolveToolPath(context, requested, "write")
+    const oldText = typeof args.old_text === "string" ? args.old_text : ""
+    const newText = typeof args.new_text === "string" ? args.new_text : ""
+    if (!oldText) throw new Error("edit_file requires a non-empty old_text value.")
+    const current = await readTextFile(target, "utf8")
+    const first = current.indexOf(oldText)
+    if (first < 0) throw new Error("edit_file could not find old_text in the target file; no changes were made.")
+    if (current.indexOf(oldText, first + oldText.length) >= 0) throw new Error("edit_file found old_text more than once. Narrow the target to a unique section; no changes were made.")
+    const content = current.slice(0, first) + newText + current.slice(first + oldText.length)
+    const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.tmp`)
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx" })
+    try { await rename(temporary, target) } catch (error) { await rm(temporary, { force: true }); throw error }
+    return { content: JSON.stringify({ edited: target, bytes: Buffer.byteLength(content) }), file: target }
+  }
+  if (["write_file", "write_text_file", "write_json_file"].includes(name)) {
     const target = await resolveToolPath(context, requested, "write")
     const overwrite = args.overwrite === true
     if (overwrite && !context.allowOverwrite) throw new Error("Local runtime blocked overwrite because the direct user prompt did not request it.")
@@ -116,23 +131,23 @@ export async function executeFilesystemTool(context: ToolContext, name: string, 
       const value = args.content
       content = JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2)
     } else {
-      if (typeof args.content !== "string") throw new Error("write_text_file requires string content.")
+      if (typeof args.content !== "string") throw new Error(`${name} requires string content.`)
       content = args.content
     }
     await mkdir(dirname(destination), { recursive: true })
     const temporary = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.tmp`)
     await writeFile(temporary, content, { encoding: "utf8", flag: "wx" })
-    await rename(temporary, destination)
+    try { await rename(temporary, destination) } catch (error) { await rm(temporary, { force: true }); throw error }
     return { content: JSON.stringify({ saved: destination, bytes: Buffer.byteLength(content) }), file: destination }
   }
   throw new Error(`Unknown filesystem tool: ${name}`)
 }
 
 export const FILESYSTEM_TOOLS = [
-  { type: "function", function: { name: "list_directory", description: "List an authorized directory before choosing where to save files.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
+  { type: "function", function: { name: "list_directory", description: "List entries in an authorized directory.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
+  { type: "function", function: { name: "read_file", description: "Read an authorized text-based file or locally parsed supported document.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
   { type: "function", function: { name: "create_directory", description: "Create an authorized directory recursively.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
-  { type: "function", function: { name: "read_file", description: "Read and locally parse an authorized text, Markdown, JSON, CSV, PDF, or DOCX file.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
-  { type: "function", function: { name: "get_file_metadata", description: "Inspect an authorized file or directory.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
-  { type: "function", function: { name: "write_text_file", description: "Write text to the agent workspace or an external destination explicitly named by the user.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, overwrite: { type: "boolean" } }, required: ["path", "content"], additionalProperties: false } } },
-  { type: "function", function: { name: "write_json_file", description: "Write valid JSON to the agent workspace or an external destination explicitly named by the user.", parameters: { type: "object", properties: { path: { type: "string" }, content: {}, overwrite: { type: "boolean" } }, required: ["path", "content"], additionalProperties: false } } },
+  { type: "function", function: { name: "write_file", description: "Create a text-based file or replace its complete content. This tool supports TXT, Markdown, JSON, JavaScript, TypeScript, YAML, and other text formats.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, overwrite: { type: "boolean" } }, required: ["path", "content"], additionalProperties: false } } },
+  { type: "function", function: { name: "edit_file", description: "Apply one unique, targeted text replacement to an existing authorized text file. old_text must match exactly once.", parameters: { type: "object", properties: { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["path", "old_text", "new_text"], additionalProperties: false } } },
+  { type: "function", function: { name: "get_file_metadata", description: "Inspect authorized file or directory metadata.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false } } },
 ] as const

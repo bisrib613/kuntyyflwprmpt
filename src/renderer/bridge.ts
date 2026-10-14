@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import type { ApiResult, AssetInput, AutoPromptApi, FlowpilotAccount, PreparedFlowpilotSession, QueueEvent, RunSettings, UpdateState } from "../shared/contracts"
-import type { ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultSettings } from "../shared/api-vault"
+import type { ApiModelCatalogItem, ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultSettings, ApiVaultTelegramBotInfo, ApiVaultTelegramStatus } from "../shared/api-vault"
 
 type SidecarEnvelope<T> = ApiResult<T>
 type EventBatch = { cursor: number; events: QueueEvent[] }
@@ -164,6 +164,7 @@ const api: AutoPromptApi = {
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   runApiVault: (request) => sidecar("api-vault:run", { request }),
+  cancelApiVaultRun: async (runId) => { const result = await sidecar<null>("api-vault:run:stop", { runId }); return result.ok ? { ok: true, value: undefined } : result },
   onApiVaultProgress: (listener) => {
     let cursor = 0
     let stopped = false
@@ -198,6 +199,14 @@ const api: AutoPromptApi = {
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   listApiVaultModels: (provider, endpoint, apiKey) => sidecar("api-vault:models", { provider, endpoint, apiKey }),
+  listApiVaultModelCatalog: (provider, endpoint, apiKey, outputType) => sidecar<ApiModelCatalogItem[]>("api-vault:model-catalog", { provider, endpoint, apiKey, outputType }),
+  validateApiVaultTelegramBot: (token) => sidecar<ApiVaultTelegramBotInfo>("api-vault:telegram:validate", { token }),
+  startApiVaultTelegram: (settings) => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:start", { settings }),
+  beginApiVaultTelegramPairing: () => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:pairing:start"),
+  getApiVaultTelegramStatus: () => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:status"),
+  approveApiVaultTelegramCandidate: (userId, chatId) => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:approve", { userId, chatId }),
+  updateApiVaultTelegramSettings: (settings) => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:update-settings", { settings }),
+  disconnectApiVaultTelegram: () => sidecar<ApiVaultTelegramStatus>("api-vault:telegram:disconnect"),
   saveApiVaultResult: async (directory, filename, content, format) => {
     try { return { ok: true, value: await invoke<string>("save_api_vault_result", { directory, filename, content, format }) } }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }

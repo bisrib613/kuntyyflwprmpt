@@ -1,11 +1,12 @@
-import { timingSafeEqual } from "node:crypto"
+import { randomUUID, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
 import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
 import type { ApiVaultProgressEvent, ApiVaultRequest } from "../shared/api-vault.js"
-import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModelCatalog, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import { approveApiVaultTelegramCandidate, beginApiVaultTelegramPairing, disconnectApiVaultTelegram, getApiVaultTelegramStatus, startApiVaultTelegram, updateApiVaultTelegramSettings, validateApiVaultTelegramBot } from "./api-vault/telegram.js"
 import type { ApiProvider } from "../shared/api-vault.js"
 import { videoSettingsError } from "../shared/video-settings.js"
 
@@ -23,6 +24,7 @@ let eventCursor = 0
 const events: Array<{ cursor: number; event: QueueEvent }> = []
 let apiVaultEventCursor = 0
 const apiVaultEvents: Array<{ cursor: number; event: ApiVaultProgressEvent }> = []
+const activeApiVaultRuns = new Map<string, AbortController>()
 
 const emit = (event: QueueEvent): void => {
   logAutomation("queue.event", { status: event.status, jobId: event.jobId, progress: event.progress, message: event.message })
@@ -111,17 +113,64 @@ async function request(method: string, params: unknown): Promise<unknown> {
     case "api-vault:run": {
       const settings = input.request as ApiVaultRequest | undefined
       if (!settings || typeof settings !== "object") throw new Error("API Vault request is required.")
+      const runId = typeof settings.runId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(settings.runId) ? settings.runId : randomUUID()
+      if (activeApiVaultRuns.has(runId)) throw new Error("An API Vault run with this ID is already active.")
+      const controller = new AbortController()
+      activeApiVaultRuns.set(runId, controller)
       logAutomation("api-vault.run.start", { provider: settings.provider, model: settings.model, mode: settings.executionMode })
       try {
-        const result = await runApiVault(installDirectory, settings, emitApiVault)
+        const result = await runApiVault(installDirectory, { ...settings, runId }, emitApiVault, { signal: controller.signal })
         logAutomation("api-vault.run.complete", { provider: settings.provider, model: result.model, files: result.files.length })
         return result
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        logAutomation("api-vault.run.failed", { provider: settings.provider, message })
-        if (settings.runId) emitApiVault({ runId: settings.runId, phase: "failed", message })
+        logAutomation("api-vault.run.failed", { provider: settings.provider, message: controller.signal.aborted ? "Run cancelled." : message })
+        emitApiVault({ runId, phase: "failed", message: controller.signal.aborted ? "Run stopped." : message })
         throw error
+      } finally {
+        activeApiVaultRuns.delete(runId)
       }
+    }
+    case "api-vault:run:stop": {
+      const runId = typeof input.runId === "string" ? input.runId : ""
+      const controller = activeApiVaultRuns.get(runId)
+      if (!controller) throw new Error("No active API Vault run was found for that ID.")
+      controller.abort()
+      return null
+    }
+    case "api-vault:telegram:validate": {
+      const token = typeof input.token === "string" ? input.token : ""
+      return validateApiVaultTelegramBot(token)
+    }
+    case "api-vault:telegram:start": {
+      const settings = input.settings as import("../shared/api-vault.js").ApiVaultSettings | undefined
+      if (!settings || typeof settings !== "object") throw new Error("API Vault settings are required to connect Telegram.")
+      return startApiVaultTelegram(installDirectory, settings)
+    }
+    case "api-vault:telegram:pairing:start":
+      return beginApiVaultTelegramPairing()
+    case "api-vault:telegram:status":
+      return getApiVaultTelegramStatus()
+    case "api-vault:telegram:approve": {
+      const userId = typeof input.userId === "number" ? input.userId : Number(input.userId)
+      const chatId = typeof input.chatId === "number" ? input.chatId : Number(input.chatId)
+      if (!Number.isSafeInteger(userId) || !Number.isSafeInteger(chatId)) throw new Error("Telegram user and chat IDs must be valid integers.")
+      return approveApiVaultTelegramCandidate(userId, chatId)
+    }
+    case "api-vault:telegram:update-settings": {
+      const settings = input.settings as import("../shared/api-vault.js").ApiVaultSettings | undefined
+      if (!settings || typeof settings !== "object") throw new Error("API Vault settings are required.")
+      return updateApiVaultTelegramSettings(settings)
+    }
+    case "api-vault:telegram:disconnect":
+      return disconnectApiVaultTelegram()
+    case "api-vault:model-catalog": {
+      const provider = input.provider as ApiProvider
+      const endpoint = typeof input.endpoint === "string" ? input.endpoint : ""
+      const apiKey = typeof input.apiKey === "string" ? input.apiKey : ""
+      const outputType = input.outputType === "image" ? "image" : "text"
+      if (!["gemini", "openai", "9router", "custom"].includes(provider) || !endpoint) throw new Error("Provider and endpoint are required to list a model catalog.")
+      return listApiVaultModelCatalog(provider, endpoint, apiKey, outputType)
     }
     case "api-vault:models": {
       const provider = input.provider as ApiProvider

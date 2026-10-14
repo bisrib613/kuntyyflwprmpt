@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version increase
+        description: Version increase (used when exact version is blank)
         required: true
         default: patch
         type: choice
         options: [patch, minor, major]
+      version:
+        description: Exact release version (optional, e.g. 0.5.0; takes precedence over bump)
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
 
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release')
     runs-on: windows-latest
     steps:
       - name: Check out main
@@ -56,8 +61,23 @@ jobs:
         shell: pwsh
         env:
           BUMP: ${{ inputs.bump || 'patch' }}
+          EXACT_VERSION: ${{ inputs.version || '' }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
         run: |
-          npm version $env:BUMP --no-git-tag-version
+          $exactVersion = $env:EXACT_VERSION
+          if ([string]::IsNullOrWhiteSpace($exactVersion) -and $env:GITHUB_EVENT_NAME -eq "push") {
+            if ($env:COMMIT_MESSAGE -match '\[release\s+(v?\d+\.\d+\.\d+)\]') {
+              $exactVersion = $Matches[1] -replace '^v', ''
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($exactVersion)) {
+            npm version $env:BUMP --no-git-tag-version
+          } else {
+            if ($exactVersion -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Exact version must be strict semver x.y.z (for example 0.5.0)."
+            }
+            npm version $exactVersion --no-git-tag-version
+          }
           $version = node -p "require('./package.json').version"
 
           $configPath = "src-tauri/tauri.conf.json"

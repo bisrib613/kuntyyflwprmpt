@@ -159,6 +159,17 @@ fn transform_api_keys(settings: &mut Value, protect: bool) -> Result<(), String>
             values.insert("apiKey".to_string(), Value::String(unprotect_secret(&ciphertext)?));
         }
     }
+    // Telegram's Bot API token uses the same OS-backed protection as provider API keys.
+    // The raw token is only restored into the in-memory settings object returned to the app.
+    if let Some(telegram) = settings.get_mut("telegram").and_then(Value::as_object_mut) {
+        if protect {
+            let bot_token = telegram.remove("botToken").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+            telegram.insert("botTokenProtected".to_string(), Value::String(protect_secret(&bot_token)?));
+        } else {
+            let ciphertext = telegram.remove("botTokenProtected").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+            telegram.insert("botToken".to_string(), Value::String(unprotect_secret(&ciphertext)?));
+        }
+    }
     Ok(())
 }
 

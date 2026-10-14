@@ -1,6 +1,8 @@
 export type ApiProvider = "gemini" | "openai" | "9router" | "custom"
-export type ApiExecutionMode = "prompt" | "agent"
+export type ApiExecutionMode = "independent" | "prompt" | "agent"
 export type ApiOutputKind = "text" | "image"
+export type ApiModelCatalogItem = { id: string; owned_by?: string; outputType: ApiOutputKind; capabilities?: { textInput?: boolean | "unknown"; imageInput?: boolean | "unknown"; imageGeneration?: boolean | "unknown"; toolCalling?: boolean | "unknown"; structuredOutput?: boolean | "unknown" }; supportedParameters?: string[] }
+export type ApiVaultModelCatalogs = Record<ApiProvider, { chat: ApiModelCatalogItem[]; image: ApiModelCatalogItem[]; chatRefreshedAt?: string | null; imageRefreshedAt?: string | null }>
 export type ConversationMode = "independent" | "continue" | "chain"
 export type ReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
 
@@ -17,6 +19,9 @@ export type ApiVaultRequest = {
   endpoint: string
   apiKey: string
   model: string
+  imageModel?: string
+  imageModelCatalog?: ApiModelCatalogItem[]
+  imageAspectRatio?: "auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"
   fallbackModel?: string
   reasoning: ReasoningLevel
   outputKind: ApiOutputKind
@@ -33,6 +38,7 @@ export type ApiVaultProgressEvent = {
   runId: string
   phase: "thinking" | "assistant" | "tool-started" | "tool-succeeded" | "tool-failed" | "completed" | "failed"
   message: string
+  textDelta?: string
   tool?: string
   file?: string
 }
@@ -64,8 +70,44 @@ export type ApiVaultProviderSettings = {
   endpoint: string
   apiKey: string
   model: string
+  imageModel?: string
+  imageAspectRatio?: "auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"
   fallbackModel: string
   reasoning: ReasoningLevel
+}
+
+export type ApiVaultTelegramApprovedChat = {
+  userId: number
+  chatId: number
+  firstName?: string
+  lastName?: string
+  username?: string
+}
+
+export type ApiVaultTelegramCandidate = ApiVaultTelegramApprovedChat & { receivedAt: string }
+
+export type ApiVaultTelegramBotInfo = {
+  id: number
+  firstName: string
+  username: string
+}
+
+export type ApiVaultTelegramSettings = {
+  botToken: string
+  enabled: boolean
+  botId?: number
+  botName?: string
+  botUsername?: string
+  approvedChats: ApiVaultTelegramApprovedChat[]
+}
+
+export type ApiVaultTelegramStatus = {
+  running: boolean
+  pairingUntil?: string
+  bot?: ApiVaultTelegramBotInfo
+  candidates: ApiVaultTelegramCandidate[]
+  approvedChats: ApiVaultTelegramApprovedChat[]
+  lastError?: string
 }
 
 export type ApiVaultSettings = {
@@ -74,6 +116,8 @@ export type ApiVaultSettings = {
   providers: Record<ApiProvider, ApiVaultProviderSettings>
   executionMode?: ApiExecutionMode
   conversationMode?: ConversationMode
+  modelCatalogs?: ApiVaultModelCatalogs
+  telegram?: ApiVaultTelegramSettings
 }
 
 export const REASONING_LEVELS: ReadonlyArray<{ value: ReasoningLevel; label: string }> = [

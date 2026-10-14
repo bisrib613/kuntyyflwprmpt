@@ -1,4 +1,4 @@
-import type { ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings } from "./api-vault.js"
+import type { ApiModelCatalogItem, ApiOutputKind, ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings, ApiVaultTelegramBotInfo, ApiVaultTelegramStatus } from "./api-vault.js"
 
 export type OutputKind = "image" | "video"
 export type ImageQuality = "original-1k" | "upscale-2k" | "upscale-4k"
@@ -81,12 +81,21 @@ export type AutoPromptApi = {
   pickApiVaultAssets(): Promise<ApiResult<ApiVaultAsset[]>>
   pickApiVaultTextFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   runApiVault(request: ApiVaultRequest): Promise<ApiResult<ApiVaultResponse>>
+  cancelApiVaultRun(runId: string): Promise<ApiResult<void>>
   onApiVaultProgress(listener: (event: ApiVaultProgressEvent) => void): () => void
   listApiVaultConversations(): Promise<ApiResult<ApiVaultConversation[]>>
   deleteApiVaultConversation(id: string): Promise<ApiResult<void>>
   loadApiVaultSettings(): Promise<ApiResult<ApiVaultSettings | null>>
   saveApiVaultSettings(settings: ApiVaultSettings): Promise<ApiResult<void>>
   listApiVaultModels(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string): Promise<ApiResult<string[]>>
+  listApiVaultModelCatalog(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string, outputType: ApiOutputKind): Promise<ApiResult<ApiModelCatalogItem[]>>
+  validateApiVaultTelegramBot(token: string): Promise<ApiResult<ApiVaultTelegramBotInfo>>
+  startApiVaultTelegram(settings: ApiVaultSettings): Promise<ApiResult<ApiVaultTelegramStatus>>
+  beginApiVaultTelegramPairing(): Promise<ApiResult<ApiVaultTelegramStatus>>
+  getApiVaultTelegramStatus(): Promise<ApiResult<ApiVaultTelegramStatus>>
+  approveApiVaultTelegramCandidate(userId: number, chatId: number): Promise<ApiResult<ApiVaultTelegramStatus>>
+  updateApiVaultTelegramSettings(settings: ApiVaultSettings): Promise<ApiResult<ApiVaultTelegramStatus>>
+  disconnectApiVaultTelegram(): Promise<ApiResult<ApiVaultTelegramStatus>>
   saveApiVaultResult(directory: string, filename: string, content: string, format: "txt" | "json"): Promise<ApiResult<string>>
   getLogDirectory(): Promise<ApiResult<string>>
   openLogDirectory(): Promise<ApiResult<void>>
