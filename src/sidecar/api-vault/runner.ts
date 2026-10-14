@@ -429,11 +429,15 @@ async function runImageRequest(request: ApiVaultRequest, model: string, signal?:
   if (request.outputKind === "image" && request.executionMode === "agent") throw new Error("Direct Image is a separate operation and cannot run as an Agent-mode request.")
   if (request.assets.length) throw new Error("Direct Image does not accept Chat attachments. Remove assets and submit the image prompt directly.")
   const prompt = request.prompt
+  const ratio = request.imageAspectRatio || "auto"
+  const imageMetadata = request.imageModelCatalog?.find((item) => item.id === model)
   if (request.provider === "gemini") {
-  const base = request.endpoint.trim().replace(/\/+$/, "")
+    const base = request.endpoint.trim().replace(/\/+$/, "")
     const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
-    const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }
-    const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) })
+    const generationConfig: Record<string, unknown> = { responseModalities: ["TEXT", "IMAGE"] }
+    if (ratio !== "auto") generationConfig.imageConfig = { aspectRatio: ratio }
+    const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig }
+    const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: requestSignal(120_000, signal) })
     if (!response.ok) throw await responseError(response)
     const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> } }> }
     const parts = raw.candidates?.[0]?.content?.parts || []
@@ -442,9 +446,26 @@ async function runImageRequest(request: ApiVaultRequest, model: string, signal?:
     return { model: raw.modelVersion || request.model, responseId: raw.responseId, text: parts.map((part) => part.text || "").join(""), sources }
   }
   const body: Record<string, unknown> = { model, prompt, n: 1 }
-  const ratio = request.imageAspectRatio || "auto"
   const antigravitySizes: Record<string, string> = { "1:1": "1024x1024", "9:16": "1024x1792", "16:9": "1792x1024", "2:3": "1024x1536", "3:2": "1536x1024" }
-  if (request.provider === "9router" && /antigravity/i.test(model) && ratio !== "auto" && antigravitySizes[ratio]) body.size = antigravitySizes[ratio]
+  const gptImageSizes: Record<string, string> = { "1:1": "1024x1024", "2:3": "1024x1536", "3:2": "1536x1024" }
+  if (ratio !== "auto") {
+    const parameterSet = imageMetadata?.supportedParameters || []
+    const antigravity = request.provider === "9router" && /antigravity/i.test(model)
+    const gptImage = request.provider === "openai" && /^gpt-image/i.test(model)
+    if (antigravity) {
+      body.size = antigravitySizes[ratio]
+    } else if (gptImage && gptImageSizes[ratio]) {
+      body.size = gptImageSizes[ratio]
+    } else if (parameterSet.includes("aspect_ratio")) {
+      body.aspect_ratio = ratio
+    } else if (parameterSet.includes("aspectRatio")) {
+      body.aspectRatio = ratio
+    } else if (parameterSet.includes("size") && gptImageSizes[ratio]) {
+      body.size = gptImageSizes[ratio]
+    } else {
+      throw new Error(`The selected Image model does not declare a supported aspect-ratio parameter for ${ratio}. Choose Auto or select a model with a compatible image adapter.`)
+    }
+  }
   const response = await fetch(endpointForImages(request.endpoint), {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
