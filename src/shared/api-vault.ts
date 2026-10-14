@@ -20,6 +20,7 @@ export type ApiVaultRequest = {
   apiKey: string
   model: string
   imageModel?: string
+  imageModelCatalog?: ApiModelCatalogItem[]
   imageAspectRatio?: "auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"
   fallbackModel?: string
   reasoning: ReasoningLevel
