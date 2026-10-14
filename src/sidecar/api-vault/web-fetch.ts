@@ -100,7 +100,7 @@ export async function fetchWebResource(rawUrl: string, format: WebFetchFormat = 
   contentType: string
   title: string
   content: string
-}> {
+}>, signal?: AbortSignal): Promise<{ url: string; status: number; contentType: string; title: string; content: string }> {
   const limit = Math.max(1_000, Math.min(100_000, Number.isFinite(maxChars) ? Math.floor(maxChars) : 20_000))
   let current = validateWebFetchUrl(rawUrl)
   let usedCompatAgent = false
@@ -114,7 +114,7 @@ export async function fetchWebResource(rawUrl: string, format: WebFetchFormat = 
       "accept-language": "en-US,en;q=0.9",
       "user-agent": usedCompatAgent ? COMPAT_USER_AGENT : DEFAULT_USER_AGENT,
     }
-    response = await fetch(current, { headers, redirect: "manual", signal: AbortSignal.timeout(25_000) })
+    response = await fetch(current, { headers, redirect: "manual", signal: signal ? AbortSignal.any([AbortSignal.timeout(25_000), signal]) : AbortSignal.timeout(25_000) })
     const challenge = response.status === 403 || response.headers.get("cf-mitigated")?.toLowerCase() === "challenge"
     if (challenge && !usedCompatAgent) {
       usedCompatAgent = true
