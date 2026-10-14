@@ -90,6 +90,24 @@ function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs)
 }
 
+function readableProviderTimeout(error: unknown, request: ApiVaultRequest): Error {
+  const original = error instanceof Error ? error : new Error(String(error))
+  if (!/the operation was aborted due to timeout/i.test(original.message)) return original
+
+  const providerName = request.provider === "9router" ? "9Router"
+    : request.provider === "openai" ? "OpenAI"
+    : request.provider === "gemini" ? "Gemini"
+    : "The configured provider"
+  const operation = request.outputKind === "image" ? "Image generation" : "The model request"
+  const guidance = request.provider === "9router"
+    ? "Make sure 9Router is running and the selected model is available, then try again."
+    : request.provider === "custom"
+      ? "Check the Base URL and model availability, then try again."
+      : "Check the provider connection and selected model, then try again."
+
+  return new Error(`${operation} via ${providerName} timed out after 120 seconds. ${guidance}`)
+}
+
 export type ApiVaultRunControl = {
   signal?: AbortSignal
   approveToolCall?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
@@ -764,8 +782,9 @@ export async function runApiVault(
       onProgress({ runId, phase: "completed", message: "Image generation completed." })
       return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
     } catch (error) {
-      await persistRunState(imageStateDirectory, runId, "failed", control.signal?.aborted ? "Image generation was cancelled" : "Image generation failed", 0, imageArtifacts).catch(() => undefined)
-      throw error
+      const readableError = readableProviderTimeout(error, request)
+      await persistRunState(imageStateDirectory, runId, "failed", control.signal?.aborted ? "Image generation was cancelled" : readableError.message, 0, imageArtifacts).catch(() => undefined)
+      throw readableError
     }
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
@@ -878,8 +897,9 @@ export async function runApiVault(
     }
   }
   } catch (error) {
-    await persistRunState(dataDirectory, runId, "failed", "Run stopped before the requested work completed", iteration, artifactStates).catch(() => undefined)
-    throw error
+    const readableError = readableProviderTimeout(error, request)
+    await persistRunState(dataDirectory, runId, "failed", readableError.message, iteration, artifactStates).catch(() => undefined)
+    throw readableError
   }
   if (!finalText.trim()) {
     await persistRunState(dataDirectory, runId, "failed", "Provider returned an empty final response", iteration, artifactStates).catch(() => undefined)
