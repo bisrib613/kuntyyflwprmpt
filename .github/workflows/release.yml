@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version increase
+        description: Version increase (used when exact version is blank)
         required: true
         default: patch
         type: choice
         options: [patch, minor, major]
+      version:
+        description: Exact release version (optional, e.g. 0.5.0; takes precedence over bump)
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
 
@@ -56,8 +61,16 @@ jobs:
         shell: pwsh
         env:
           BUMP: ${{ inputs.bump || 'patch' }}
+          EXACT_VERSION: ${{ inputs.version || '' }}
         run: |
-          npm version $env:BUMP --no-git-tag-version
+          if ([string]::IsNullOrWhiteSpace($env:EXACT_VERSION)) {
+            npm version $env:BUMP --no-git-tag-version
+          } else {
+            if ($env:EXACT_VERSION -notmatch '^\\d+\\.\\d+\\.\\d+$') {
+              throw "Exact version must be strict semver x.y.z (for example 0.5.0)."
+            }
+            npm version $env:EXACT_VERSION --no-git-tag-version
+          }
           $version = node -p "require('./package.json').version"
 
           $configPath = "src-tauri/tauri.conf.json"
