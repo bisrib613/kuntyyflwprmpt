@@ -72,10 +72,10 @@ describe("API Vault model catalogs", () => {
       urls.push(address)
       const headers = init?.headers as Record<string, string> | undefined
       expect(headers?.authorization).toBeUndefined()
-      if (address === "http://localhost:20128/v1/models" || address === "http://localhost:20128/v1/models/info?id=ag%2Fimage-model") {
+      if (address === "http://localhost:20128/v1/models/image" || address === "http://localhost:20128/v1/models/info?id=ag%2Fimage-model") {
         throw new Error("fetch failed")
       }
-      if (address === "http://127.0.0.1:20128/v1/models") {
+      if (address === "http://127.0.0.1:20128/v1/models/image") {
         return new Response(JSON.stringify({ data: [{ id: "ag/image-model", owned_by: "antigravity" }] }), { status: 200, headers: { "content-type": "application/json" } })
       }
       expect(address).toBe("http://127.0.0.1:20128/v1/models/info?id=ag%2Fimage-model")
@@ -86,8 +86,8 @@ describe("API Vault model catalogs", () => {
     const models = await listApiVaultModelCatalog("9router", "http://localhost:20128/v1", "", "image")
     expect(models).toMatchObject([{ id: "ag/image-model", owned_by: "antigravity", outputType: "image", capabilities: { imageGeneration: true } }])
     expect(urls).toEqual([
-      "http://localhost:20128/v1/models",
-      "http://127.0.0.1:20128/v1/models",
+      "http://localhost:20128/v1/models/image",
+      "http://127.0.0.1:20128/v1/models/image",
       "http://localhost:20128/v1/models/info?id=ag%2Fimage-model",
       "http://127.0.0.1:20128/v1/models/info?id=ag%2Fimage-model",
     ])
