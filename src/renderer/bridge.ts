@@ -164,6 +164,7 @@ const api: AutoPromptApi = {
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   },
   runApiVault: (request) => sidecar("api-vault:run", { request }),
+  cancelApiVaultRun: async (runId) => { const result = await sidecar<null>("api-vault:run:stop", { runId }); return result.ok ? { ok: true, value: undefined } : result },
   onApiVaultProgress: (listener) => {
     let cursor = 0
     let stopped = false
