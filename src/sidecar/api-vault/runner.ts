@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { extname, isAbsolute, join, resolve } from "node:path"
-import type { AgentTraceEntry, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
+import type { AgentTraceEntry, ApiModelCatalogItem, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse } from "../../shared/api-vault.js"
 import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
 import { parseDocument } from "./documents.js"
@@ -16,8 +16,10 @@ const MAX_TOOL_ROUNDS = 8
 const MAX_TOOL_CALLS = 16
 const MAX_CONTEXT_CHARS = 300_000
 const TOOL_TIMEOUT_MS = 30_000
-const RUNTIME_INSTRUCTION = `You are operating inside Kuntyy AutoPrompt with local filesystem tools available in both Prompt and Agent modes.
-When the user asks to create or save files, use the tools instead of pasting the full file contents into the final response. Briefly describe useful progress before tool calls. Never claim that a file operation succeeded until its tool result confirms success. After successful writes, return a concise completion summary with saved paths. Only include full saved file contents when the current user prompt explicitly asks to display them inline.`
+const RUNTIME_INSTRUCTION = `You are the general-purpose primary agent inside Kuntyy AutoPrompt. This runtime instruction is a durable behavior contract, not a specialist role.
+Understand and complete the user's actual goal. Use the registered tools when they materially help complete or verify the task. Continue across multiple tool cycles when needed; do not abbreviate a substantial deliverable merely to fit one response. Inspect relevant existing files and context before destructive or conflicting changes.
+Let the user's instructions determine deliverable count, filenames, formats, separators, and directory structure. Preserve explicit prompt text, model names, paths, image prompts, aspect ratios, and parameters; infer only missing values. Treat tool results as observations and recover from truthful errors where possible. Never claim that a file, image, fetch, or operation succeeded without a successful tool result.
+When files are requested, keep substantial content in real artifacts and return a concise report grounded in actual tool results. Direct responses are also valid; do not create unnecessary plans or files. Use dedicated filesystem tools rather than shell or PowerShell. Do not invent domain-specific workflows, parse user prose as runtime control, synthesize progress or completion claims, or expose credentials, hidden reasoning, raw protocol payloads, or internal provider traces.`
 
 function validRunId(value: string | undefined): value is string {
   return Boolean(value && /^[a-zA-Z0-9_-]{1,128}$/.test(value))
@@ -78,12 +80,12 @@ function conversationTitle(content: unknown): string {
     .slice(0, 80) || "Untitled conversation"
 }
 
-async function withToolTimeout<T>(promise: Promise<T>): Promise<T> {
+async function withToolTimeout<T>(promise: Promise<T>, timeoutMs = TOOL_TIMEOUT_MS): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   try {
     return await Promise.race([
       promise,
-      new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error("Filesystem tool exceeded 30 seconds.")), TOOL_TIMEOUT_MS) }),
+      new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`Tool execution exceeded ${Math.floor(timeoutMs / 1000)} seconds.`)), timeoutMs) }),
     ])
   } finally {
     if (timer) clearTimeout(timer)
@@ -444,12 +446,17 @@ export async function runApiVault(
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   const thread = await loadThread(dataDirectory, request)
   const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
-  messages.unshift({ role: "system", content: RUNTIME_INSTRUCTION })
   if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
+  messages.unshift({ role: "system", content: RUNTIME_INSTRUCTION })
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
-  const tools = [...FILESYSTEM_TOOLS, ...WEB_FETCH_TOOLS, ...IMAGE_GENERATE_TOOLS].filter((tool) => context.allowWrite || !["create_directory", "write_file", "edit_file", "write_text_file", "write_json_file"].includes(tool.function.name))
+  const imageModelIds = [...new Set([request.imageModel, ...(request.imageModelCatalog || []).map((item: ApiModelCatalogItem) => item.id)].filter((value): value is string => Boolean(value?.trim())))]
+  const imageTools = imageModelIds.length ? IMAGE_GENERATE_TOOLS.map((tool) => ({
+    ...tool,
+    function: { ...tool.function, parameters: { ...tool.function.parameters, properties: { ...tool.function.parameters.properties, model: { type: "string", enum: imageModelIds } } } },
+  })) : []
+  const tools = [...FILESYSTEM_TOOLS, ...WEB_FETCH_TOOLS, ...imageTools].filter((tool) => context.allowWrite || !["create_directory", "write_file", "edit_file", "write_text_file", "write_json_file"].includes(tool.function.name))
   let responseId: string | undefined
   let finalText = ""
   let calls = 0
@@ -491,6 +498,9 @@ export async function runApiVault(
           if (typeof args.prompt !== "string" || !args.prompt.length) throw new Error("image_generate requires a prompt.")
           const selectedImageModel = typeof args.model === "string" && args.model.trim() ? args.model.trim() : (request.imageModel || "")
           if (!selectedImageModel) throw new Error("No Image model is configured. Refresh or select an Image model first.")
+          if (request.imageModelCatalog?.length && !request.imageModelCatalog.some((item) => item.id === selectedImageModel) && selectedImageModel !== request.imageModel) {
+            throw new Error("image_generate selected a model that is not present in the current Image catalog.")
+          }
           const outputDirectory = join(context.workspace, "images")
           await mkdir(outputDirectory, { recursive: true })
           const imageRequest: ApiVaultRequest = {
@@ -498,7 +508,7 @@ export async function runApiVault(
             imageAspectRatio: (["auto", "1:1", "9:16", "16:9", "2:3", "3:2"].includes(String(args.aspect_ratio)) ? String(args.aspect_ratio) : request.imageAspectRatio || "auto") as ApiVaultRequest["imageAspectRatio"],
             prompt: args.prompt, systemInstruction: "", assets: [], outputKind: "image", outputDirectory, executionMode: "independent",
           }
-          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel))
+          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel), 120_000)
           const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources)
           saved.forEach((file) => files.push(file))
           result = { content: JSON.stringify({ generated: true, model: generated.model, files: saved, note: "The explicit image prompt was sent unchanged." }), file: saved[0] }
