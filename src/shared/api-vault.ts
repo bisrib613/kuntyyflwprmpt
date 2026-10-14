@@ -76,6 +76,40 @@ export type ApiVaultProviderSettings = {
   reasoning: ReasoningLevel
 }
 
+export type ApiVaultTelegramApprovedChat = {
+  userId: number
+  chatId: number
+  firstName?: string
+  lastName?: string
+  username?: string
+}
+
+export type ApiVaultTelegramCandidate = ApiVaultTelegramApprovedChat & { receivedAt: string }
+
+export type ApiVaultTelegramBotInfo = {
+  id: number
+  firstName: string
+  username: string
+}
+
+export type ApiVaultTelegramSettings = {
+  botToken: string
+  enabled: boolean
+  botId?: number
+  botName?: string
+  botUsername?: string
+  approvedChats: ApiVaultTelegramApprovedChat[]
+}
+
+export type ApiVaultTelegramStatus = {
+  running: boolean
+  pairingUntil?: string
+  bot?: ApiVaultTelegramBotInfo
+  candidates: ApiVaultTelegramCandidate[]
+  approvedChats: ApiVaultTelegramApprovedChat[]
+  lastError?: string
+}
+
 export type ApiVaultSettings = {
   version: 1
   activeProvider: ApiProvider
@@ -83,6 +117,7 @@ export type ApiVaultSettings = {
   executionMode?: ApiExecutionMode
   conversationMode?: ConversationMode
   modelCatalogs?: ApiVaultModelCatalogs
+  telegram?: ApiVaultTelegramSettings
 }
 
 export const REASONING_LEVELS: ReadonlyArray<{ value: ReasoningLevel; label: string }> = [
