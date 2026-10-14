@@ -39,10 +39,6 @@ function toolProgress(name: string, args: Record<string, unknown>, completed: bo
   return completed ? `${name} completed.` : `Running ${name}…`
 }
 
-function assistantProgress(content: unknown): string {
-  return assistantText(content).replace(/```[\s\S]*?```/g, "").replace(/\s+/g, " ").trim().slice(0, 1_000)
-}
-
 function explicitlyRequestsInlineContent(prompt: string): boolean {
   return /\b(?:show|display|include|paste|print|tampilkan|sertakan|tempel|cetak)\b.{0,50}\b(?:code|content|file|kode|isi|berkas)\b/i.test(prompt)
 }
@@ -436,7 +432,7 @@ async function runImageRequest(request: ApiVaultRequest, model: string, signal?:
   if (request.assets.length) throw new Error("Direct Image does not accept Chat attachments. Remove assets and submit the image prompt directly.")
   const prompt = request.prompt
   if (request.provider === "gemini") {
-    const base = request.endpoint.trim().replace(/\/+$/, "")
+  const base = request.endpoint.trim().replace(/\/+$/, "")
     const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
     const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }
     const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) })
@@ -598,7 +594,7 @@ const IMAGE_GENERATE_TOOLS = [
 
 async function fetchThrough9Router(request: ApiVaultRequest, url: string, format: WebFetchFormat, maxChars: number, signal?: AbortSignal): Promise<{ url: string; status: number; contentType: string; title: string; content: string; source: string }> {
   const target = validateWebFetchUrl(url)
-  const base = request.endpoint.trim().replace(/\\/+$/, "")
+  const base = request.endpoint.trim().replace(/\/+$/, "")
   const endpoint = base.endsWith("/web/fetch") ? base : `${base}/web/fetch`
   const response = await fetch(endpoint, {
     method: "POST",
@@ -660,7 +656,7 @@ export async function runApiVault(
     try {
       generated = await runImageRequest(request, model, control.signal)
     } catch (error) {
-      if (request.provider !== "9router" || !request.fallbackModel?.trim() || model === routedModel(request.fallbackModel, request.provider, request.reasoning)) throw error
+      if (control.signal?.aborted || request.provider !== "9router" || !request.fallbackModel?.trim() || model === request.fallbackModel.trim()) throw error
       model = request.fallbackModel.trim()
       generated = await runImageRequest(request, model, control.signal)
     }
@@ -714,6 +710,7 @@ export async function runApiVault(
     if (control.signal?.aborted) throw new Error("Run was cancelled.")
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Tool execution exceeded ${MAX_TOOL_ROUNDS} rounds.`)
     for (const call of toolCalls) {
+      if (control.signal?.aborted) throw new Error("Run was cancelled.")
       calls += 1
       if (calls > MAX_TOOL_CALLS) throw new Error(`Tool execution exceeded ${MAX_TOOL_CALLS} calls.`)
       let args: Record<string, unknown>
