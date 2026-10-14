@@ -39,15 +39,6 @@ function toolProgress(name: string, args: Record<string, unknown>, completed: bo
   return completed ? `${name} completed.` : `Running ${name}…`
 }
 
-function explicitlyRequestsInlineContent(prompt: string): boolean {
-  return /\b(?:show|display|include|paste|print|tampilkan|sertakan|tempel|cetak)\b.{0,50}\b(?:code|content|file|kode|isi|berkas)\b/i.test(prompt)
-}
-
-function cleanFileCompletion(text: string, files: string[], prompt: string): string {
-  if (!files.length || explicitlyRequestsInlineContent(prompt) || (!/```/.test(text) && text.length <= 4_000)) return text
-  return `Completed. ${files.length} file${files.length === 1 ? "" : "s"} saved successfully:\n${files.map((file) => `- ${file}`).join("\n")}`
-}
-
 function assistantText(content: unknown): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
@@ -804,7 +795,6 @@ export async function runApiVault(
     await persistRunState(dataDirectory, runId, "failed", "Provider returned an empty final response", iteration, artifactStates).catch(() => undefined)
     throw new Error("Provider returned an empty final response.")
   }
-  finalText = cleanFileCompletion(finalText, files, request.prompt)
   const persistsConversation = request.executionMode === "agent"
   if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
   const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
