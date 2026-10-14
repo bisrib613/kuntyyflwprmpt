@@ -271,15 +271,13 @@ fn should_stop_sidecar(window_label: &str, destroyed: bool) -> bool {
     destroyed && window_label == "main"
 }
 
-fn sidecar_request_timeout(method: &str) -> Duration {
+fn sidecar_request_timeout(method: &str) -> Option<Duration> {
     match method {
-        // One Agent run can include several provider and filesystem-tool rounds.
-        // The sidecar owns the tighter per-round limits; the bridge must not abort
-        // a healthy run while it is still producing a response.
-        "api-vault:run" => Duration::from_secs(30 * 60),
-        "api-vault:models" => Duration::from_secs(60),
-        "events:poll" => Duration::from_secs(15),
-        _ => Duration::from_secs(60),
+        // Agent runs have no overall deadline; the user can cancel them explicitly.
+        "api-vault:run" => None,
+        "api-vault:models" => Some(Duration::from_secs(60)),
+        "events:poll" => Some(Duration::from_secs(15)),
+        _ => Some(Duration::from_secs(60)),
     }
 }
 
@@ -507,10 +505,10 @@ mod path_tests {
     }
 
     #[test]
-    fn allows_agent_runs_to_outlive_provider_round_timeouts() {
-        assert_eq!(sidecar_request_timeout("api-vault:run"), std::time::Duration::from_secs(30 * 60));
-        assert_eq!(sidecar_request_timeout("api-vault:models"), std::time::Duration::from_secs(60));
-        assert_eq!(sidecar_request_timeout("events:poll"), std::time::Duration::from_secs(15));
+    fn agent_runs_have_no_overall_bridge_timeout() {
+        assert_eq!(sidecar_request_timeout("api-vault:run"), None);
+        assert_eq!(sidecar_request_timeout("api-vault:models"), Some(std::time::Duration::from_secs(60)));
+        assert_eq!(sidecar_request_timeout("events:poll"), Some(std::time::Duration::from_secs(15)));
     }
 }
 
@@ -532,14 +530,19 @@ async fn sidecar_request(app: tauri::AppHandle, state: tauri::State<'_, Automati
     };
     let result = async {
         let timeout = sidecar_request_timeout(&method);
-        state.client
-            .post(&state.endpoint)
-            .timeout(timeout)
+        let mut request = state.client.post(&state.endpoint);
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        request
             .bearer_auth(&state.token)
             .json(&json!({ "method": method, "params": params }))
             .send().await.map_err(|error| {
                 if error.is_timeout() {
-                    format!("Automation request exceeded {} seconds.", timeout.as_secs())
+                    match timeout {
+                        Some(timeout) => format!("Automation request exceeded {} seconds.", timeout.as_secs()),
+                        None => format!("Automation bridge connection timed out: {error}"),
+                    }
                 } else {
                     format!("Automation runtime is unavailable: {error}")
                 }
