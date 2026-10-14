@@ -36,7 +36,25 @@ function defaultProfiles(): Record<ApiProvider, ApiVaultProviderSettings> {
 }
 
 function defaultCatalogs(): ApiVaultModelCatalogs {
-  return Object.fromEntries(PROVIDERS.map((item) => [item.value, { chat: [], image: [] }])) as ApiVaultModelCatalogs
+  return {
+    gemini: { chat: [], image: [] },
+    openai: { chat: [], image: [] },
+    "9router": { chat: [], image: [] },
+    custom: { chat: [], image: [] },
+  }
+}
+
+function defaultModelOptions(): Record<ApiProvider, string[]> {
+  return {
+    gemini: ["gemini-2.5-flash"],
+    openai: ["gpt-5"],
+    "9router": ["ag/gemini-3.6-flash-low"],
+    custom: [],
+  }
+}
+
+function emptyModelOptions(): Record<ApiProvider, string[]> {
+  return { gemini: [], openai: [], "9router": [], custom: [] }
 }
 
 export function ApiVaultView() {
@@ -45,8 +63,8 @@ export function ApiVaultView() {
   const profile = profiles[provider]
   const { endpoint, apiKey, model, imageModel = "", imageAspectRatio = "auto", fallbackModel, reasoning } = profile
   const [modelCatalogs, setModelCatalogs] = useState<ApiVaultModelCatalogs>(defaultCatalogs)
-  const [modelOptions, setModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, item.model ? [item.model] : []])) as Record<ApiProvider, string[]>)
-  const [imageModelOptions, setImageModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, []])) as Record<ApiProvider, string[]>)
+  const [modelOptions, setModelOptions] = useState<Record<ApiProvider, string[]>>(defaultModelOptions)
+  const [imageModelOptions, setImageModelOptions] = useState<Record<ApiProvider, string[]>>(emptyModelOptions)
   const [customModel, setCustomModel] = useState(false)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [executionMode, setExecutionMode] = useState<"independent" | "agent">("independent")
