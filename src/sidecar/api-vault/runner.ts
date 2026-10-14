@@ -83,10 +83,6 @@ async function withToolCancellation<T>(promise: Promise<T>, signal?: AbortSignal
   }
 }
 
-function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  return signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs)
-}
-
 function readableProviderTimeout(error: unknown, request: ApiVaultRequest): Error {
   const original = error instanceof Error ? error : new Error(String(error))
   if (!/the operation was aborted due to timeout/i.test(original.message)) return original
