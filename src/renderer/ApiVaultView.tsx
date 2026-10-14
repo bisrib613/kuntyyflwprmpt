@@ -222,7 +222,7 @@ export function ApiVaultView() {
         setStatus(`Running prompt ${index + 1} of ${prompts.length}…`)
         const result = await window.autoPrompt.runApiVault({
           runId,
-          provider, endpoint, apiKey, model: selectedModel, imageModel: imageModel || undefined, imageAspectRatio, fallbackModel: provider === "9router" ? fallbackModel : undefined,
+          provider, endpoint, apiKey, model: selectedModel, imageModel: imageModel || undefined, imageModelCatalog: modelCatalogs[provider].image, imageAspectRatio, fallbackModel: provider === "9router" ? fallbackModel : undefined,
           reasoning, outputKind, outputDirectory: outputKind === "image" ? outputDirectory : undefined,
           executionMode, conversationMode: conversationMode === "independent" ? "independent" : "continue",
           threadId: activeThreadId, systemInstruction, prompt: prompts[index], assets,
