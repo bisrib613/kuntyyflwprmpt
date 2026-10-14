@@ -1,6 +1,8 @@
 export type ApiProvider = "gemini" | "openai" | "9router" | "custom"
-export type ApiExecutionMode = "prompt" | "agent"
+export type ApiExecutionMode = "independent" | "prompt" | "agent"
 export type ApiOutputKind = "text" | "image"
+export type ApiModelCatalogItem = { id: string; owned_by?: string; outputType: ApiOutputKind; capabilities?: { textInput?: boolean | "unknown"; imageInput?: boolean | "unknown"; imageGeneration?: boolean | "unknown"; toolCalling?: boolean | "unknown"; structuredOutput?: boolean | "unknown" } }
+export type ApiVaultModelCatalogs = Record<ApiProvider, { chat: ApiModelCatalogItem[]; image: ApiModelCatalogItem[]; chatRefreshedAt?: string | null; imageRefreshedAt?: string | null }>
 export type ConversationMode = "independent" | "continue" | "chain"
 export type ReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
 
@@ -17,6 +19,8 @@ export type ApiVaultRequest = {
   endpoint: string
   apiKey: string
   model: string
+  imageModel?: string
+  imageAspectRatio?: "auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"
   fallbackModel?: string
   reasoning: ReasoningLevel
   outputKind: ApiOutputKind
@@ -64,6 +68,7 @@ export type ApiVaultProviderSettings = {
   endpoint: string
   apiKey: string
   model: string
+  imageModel?: string
   fallbackModel: string
   reasoning: ReasoningLevel
 }
@@ -74,6 +79,7 @@ export type ApiVaultSettings = {
   providers: Record<ApiProvider, ApiVaultProviderSettings>
   executionMode?: ApiExecutionMode
   conversationMode?: ConversationMode
+  modelCatalogs?: ApiVaultModelCatalogs
 }
 
 export const REASONING_LEVELS: ReadonlyArray<{ value: ReasoningLevel; label: string }> = [
