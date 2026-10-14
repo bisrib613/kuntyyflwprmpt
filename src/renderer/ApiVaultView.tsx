@@ -211,7 +211,11 @@ export function ApiVaultView() {
   }
 
   const run = async () => {
-    if (!endpoint.trim() || !model.trim() || !prompts.length) return
+    if (!endpoint.trim() || !selectedModel.trim() || !prompts.length) return
+    if (outputKind === "image" && assets.length) {
+      const message = "Direct Image does not use Chat attachments. Remove selected assets before generating an image."
+      setRunError(message); setStatus(message); return
+    }
     setRunning(true); setRunError(""); setResponse(null); setProgressEvents([]); activeRunIds.current.clear()
     let activeThreadId: string | undefined = conversationMode === "independent" ? undefined : threadId || undefined
     let completedCount = 0
@@ -225,7 +229,7 @@ export function ApiVaultView() {
           provider, endpoint, apiKey, model: selectedModel, imageModel: imageModel || undefined, imageModelCatalog: modelCatalogs[provider].image, imageAspectRatio, fallbackModel: provider === "9router" ? fallbackModel : undefined,
           reasoning, outputKind, outputDirectory: outputKind === "image" ? outputDirectory : undefined,
           executionMode, conversationMode: conversationMode === "independent" ? "independent" : "continue",
-          threadId: activeThreadId, systemInstruction, prompt: prompts[index], assets,
+          threadId: activeThreadId, systemInstruction: outputKind === "image" ? "" : systemInstruction, prompt: prompts[index], assets: outputKind === "image" ? [] : assets,
         })
         if (!result.ok) throw new Error(result.error)
         activeThreadId = result.value.threadId
@@ -256,10 +260,10 @@ export function ApiVaultView() {
       {customModel && <label>Custom model ID<input value={selectedModel} disabled={running} onChange={(event) => updateProfile(outputKind === "image" ? { imageModel: event.target.value } : { model: event.target.value })} placeholder={outputKind === "image" ? "Image model ID" : "Chat model ID"} /></label>}
       {provider === "9router" && <label>Fallback model <span className="optional">Optional</span><input list="api-vault-model-options" value={fallbackModel} disabled={running} onChange={(event) => updateProfile({ fallbackModel: event.target.value })} placeholder="Used only after a provider error" /></label>}
       <datalist id="api-vault-model-options">{modelOptions[provider].map((value) => <option value={value} key={value} />)}</datalist>
-      <label>Reasoning<select value={reasoning} disabled={running} onChange={(event) => updateProfile({ reasoning: event.target.value as ReasoningLevel })}>{REASONING_LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+      {outputKind === "text" && <label>Reasoning<select value={reasoning} disabled={running} onChange={(event) => updateProfile({ reasoning: event.target.value as ReasoningLevel })}>{REASONING_LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>}
       <p className="field-help">Provider settings are saved per provider. API keys are protected by Windows.</p>
       <div className="section-heading vault-section"><span>02</span><div><h2>Runtime</h2><p>Context and tools</p></div></div>
-      <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => setOutputKind(event.target.value as ApiOutputKind)}><option value="text">Chat</option><option value="image">Image</option></select></label>
+      <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => { const value = event.target.value as ApiOutputKind; setOutputKind(value); if (value === "image") { setConversationMode("independent"); setThreadId("") } }}><option value="text">Chat</option><option value="image">Image</option></select></label>
       {outputKind === "image" && <div className="folder vault-folder"><span>{outputDirectory || "No image result folder selected"}</span><button disabled={running} onClick={() => void chooseOutputDirectory()}>Choose</button></div>}
       {outputKind === "image" && <label>Aspect ratio<select value={imageAspectRatio} disabled={running} onChange={(event) => updateProfile({ imageAspectRatio: event.target.value as ApiVaultProviderSettings["imageAspectRatio"] })}><option value="auto">Auto</option><option value="1:1">1:1</option><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="2:3">2:3</option><option value="3:2">3:2</option></select></label>}
       {outputKind === "text" && <div className="result-save-settings">
@@ -268,7 +272,7 @@ export function ApiVaultView() {
         <label>Filename <span className="optional">Optional</span><input value={resultFilename} disabled={running} onChange={(event) => setResultFilename(event.target.value)} placeholder="Automatic when blank" /></label>
         <div className="folder vault-folder"><span>{resultDirectory || "No text result folder selected"}</span><button disabled={running} onClick={() => void chooseResultDirectory()}>Choose</button></div>
       </div>}
-      <label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "independent" | "agent"; setExecutionMode(value); if (value === "agent") { setOutputKind("text"); setConversationMode("continue") } }}><option value="independent">Independent</option><option value="agent">Agent</option></select></label>
+      {outputKind === "text" && <><label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "independent" | "agent"; setExecutionMode(value); if (value === "agent") { setOutputKind("text"); setConversationMode("continue") } }}><option value="independent">Independent</option><option value="agent">Agent</option></select></label>
       <label>Context<select value={conversationMode} disabled={running} onChange={(event) => { setConversationMode(event.target.value as ConversationMode); setThreadId("") }}><option value="independent">Independent</option><option value="continue">Conversation</option><option value="chain">Chain bulk prompts</option></select></label>
       {conversationMode !== "independent" && <div className="conversation-manager">
         <label>Conversation <span className="optional">Blank starts new</span><select value={threadId} disabled={running} onChange={(event) => { setThreadId(event.target.value); setResponse(null); setRunError("") }}><option value="">New conversation</option>{conversations.map((item) => <option value={item.id} key={item.id}>{item.title} · {item.turnCount} turn{item.turnCount === 1 ? "" : "s"}</option>)}</select></label>
@@ -276,18 +280,20 @@ export function ApiVaultView() {
       </div>}
       <p className="field-help">{executionMode === "agent"
         ? <>Agent uses tools and saves each completed turn to the selected conversation.</>
-        : <>Prompt uses tools in an unsaved branch. A selected conversation is loaded as its starting context.</>}</p>
+        : <>Independent uses the full primary agent in an unsaved branch. A selected conversation is loaded as context without changing its saved history.</>}</p></>}
+      {outputKind === "image" && <p className="field-help">Direct Image runs each prompt independently and does not use conversation history, system instructions, reasoning, or Chat assets.</p> }
     </aside>
 
     <section className="vault-workspace">
-      <div className="workspace-head"><div><p className="eyebrow">API Vault</p><h2>Prompt workspace</h2><p className="workspace-subtitle">Use <code>---</code> to run multiple prompts. Only the latest output is shown.</p></div></div>
+      <div className="workspace-head"><div><p className="eyebrow">API Vault</p><h2>Prompt workspace</h2><p className="workspace-subtitle">Use <code>---</code> to run multiple prompts. Bulk prompts run independently unless chaining is explicitly selected.</p></div></div>
       <article className="vault-card">
-        <div className="vault-field-head"><div><strong>System instruction</strong><span>Optional and separate from assets</span></div><button className="text-button" disabled={running} onClick={() => void loadText("system")}>Load TXT / MD</button></div>
+        {outputKind === "text" && <><div className="vault-field-head"><div><strong>System instruction</strong><span>Optional and separate from assets</span></div><button className="text-button" disabled={running} onClick={() => void loadText("system")}>Load TXT / MD</button></div>
         <textarea className="system-input" value={systemInstruction} disabled={running} onChange={(event) => setSystemInstruction(event.target.value)} placeholder="Define behavior, constraints, or output rules…" />
+        </>}
         <div className="vault-field-head"><div><strong>User prompt</strong><span>{prompts.length} prompt{prompts.length === 1 ? "" : "s"}</span></div><button className="text-button" disabled={running} onClick={() => void loadText("prompt")}>Load TXT / MD</button></div>
         <textarea className="vault-prompt" value={prompt} disabled={running} onChange={(event) => setPrompt(event.target.value)} placeholder={"Enter a prompt…\n\n---\n\nAdd another prompt."} />
-        <div className="vault-field-head"><div><strong>Assets</strong><span>Images stay native; documents are parsed locally</span></div><button className="text-button" disabled={running} onClick={() => void addAssets()}>＋ Select assets</button></div>
-        <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div>
+        {outputKind === "text" && <><div className="vault-field-head"><div><strong>Assets</strong><span>Images stay native; documents are parsed locally</span></div><button className="text-button" disabled={running} onClick={() => void addAssets()}>＋ Select assets</button></div>
+        <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div></>}
       </article>
       {progressEvents.length > 0 && <article className="vault-response vault-live" aria-live="polite">
         <div className="vault-response-head"><div><strong>Live activity</strong><span>{running ? "Working" : "Completed"} · real tool results</span></div></div>
@@ -315,10 +321,10 @@ export function ApiVaultView() {
     </section>
 
     <aside className="vault-run">
-      <div><p className="eyebrow">Execution</p><h2>{executionMode === "agent" ? "Agent ready" : "Prompt ready"}</h2><p>{prompts.length} prompt{prompts.length === 1 ? "" : "s"} · {assets.length} asset{assets.length === 1 ? "" : "s"}</p></div>
+      <div><p className="eyebrow">Execution</p><h2>{outputKind === "image" ? "Direct Image ready" : executionMode === "agent" ? "Agent ready" : "Independent ready"}</h2><p>{prompts.length} prompt{prompts.length === 1 ? "" : "s"} · {assets.length} asset{assets.length === 1 ? "" : "s"}</p></div>
       <div className="summary-grid"><div><span>Provider</span><strong>{provider}</strong></div><div><span>Reasoning</span><strong>{reasoning}</strong></div><div><span>Mode</span><strong>{executionMode}</strong></div><div><span>Context</span><strong>{conversationMode}</strong></div></div>
       <div className="message" role="status">{status}</div>
-      <button className="run-button" disabled={running || !settingsLoaded || !endpoint.trim() || !model.trim() || !prompts.length || (outputKind === "image" && !outputDirectory)} onClick={() => void run()}><span>{running ? "Running…" : executionMode === "agent" ? "Run agent" : "Run prompt"}</span><b>→</b></button>
+      <button className="run-button" disabled={running || !settingsLoaded || !endpoint.trim() || !selectedModel.trim() || !prompts.length || (outputKind === "image" && !outputDirectory)} onClick={() => void run()}><span>{running ? "Running…" : executionMode === "agent" ? "Run agent" : "Run prompt"}</span><b>→</b></button>
     </aside>
   </main>
 }
