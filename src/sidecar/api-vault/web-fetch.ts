@@ -119,7 +119,7 @@ export async function fetchWebResource(
       "accept-language": "en-US,en;q=0.9",
       "user-agent": usedCompatAgent ? COMPAT_USER_AGENT : DEFAULT_USER_AGENT,
     }
-    response = await fetch(current, { headers, redirect: "manual", signal: signal ? AbortSignal.any([AbortSignal.timeout(25_000), signal]) : AbortSignal.timeout(25_000) })
+    response = await fetch(current, { headers, redirect: "manual", ...(signal ? { signal } : {}) })
     const challenge = response.status === 403 || response.headers.get("cf-mitigated")?.toLowerCase() === "challenge"
     if (challenge && !usedCompatAgent) {
       usedCompatAgent = true

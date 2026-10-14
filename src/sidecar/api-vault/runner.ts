@@ -15,7 +15,6 @@ type OpenAiResponse = { id?: string; model?: string; choices?: Array<{ message?:
 const MAX_TOOL_ROUNDS = 8
 const MAX_TOOL_CALLS = 16
 const MAX_CONTEXT_CHARS = 300_000
-const TOOL_TIMEOUT_MS = 30_000
 const RUNTIME_INSTRUCTION = `You are the general-purpose primary agent inside Kuntyy AutoPrompt. This runtime instruction is a durable behavior contract, not a specialist role.
 Understand and complete the user's actual goal. Use the registered tools when they materially help complete or verify the task. Continue across multiple tool cycles when needed; do not abbreviate a substantial deliverable merely to fit one response. Inspect relevant existing files and context before destructive or conflicting changes.
 Let the user's instructions determine deliverable count, filenames, formats, separators, and directory structure. Preserve explicit prompt text, model names, paths, image prompts, aspect ratios, and parameters; infer only missing values. Treat tool results as observations and recover from truthful errors where possible. Never claim that a file, image, fetch, or operation succeeded without a successful tool result.
@@ -67,27 +66,21 @@ function conversationTitle(content: unknown): string {
     .slice(0, 80) || "Untitled conversation"
 }
 
-async function withToolTimeout<T>(promise: Promise<T>, timeoutMs = TOOL_TIMEOUT_MS, signal?: AbortSignal): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
+async function withToolCancellation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
   let abortHandler: (() => void) | undefined
   try {
     return await Promise.race([
       promise,
-      new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`Tool execution exceeded ${Math.floor(timeoutMs / 1000)} seconds.`)), timeoutMs) }),
-      ...(signal ? [new Promise<T>((_, reject) => {
+      new Promise<T>((_, reject) => {
         abortHandler = () => reject(new Error("Run was cancelled."))
         if (signal.aborted) abortHandler()
         else signal.addEventListener("abort", abortHandler, { once: true })
-      })] : []),
+      }),
     ])
   } finally {
-    if (timer) clearTimeout(timer)
-    if (signal && abortHandler) signal.removeEventListener("abort", abortHandler)
+    if (abortHandler) signal.removeEventListener("abort", abortHandler)
   }
-}
-
-function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  return signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs)
 }
 
 function readableProviderTimeout(error: unknown, request: ApiVaultRequest): Error {
@@ -105,7 +98,7 @@ function readableProviderTimeout(error: unknown, request: ApiVaultRequest): Erro
       ? "Check the Base URL and model availability, then try again."
       : "Check the provider connection and selected model, then try again."
 
-  return new Error(`${operation} timed out after 120 seconds. ${guidance}`)
+  return new Error(`${operation} was interrupted by a timeout. ${guidance}`)
 }
 
 export type ApiVaultRunControl = {
@@ -152,7 +145,7 @@ async function imageBytes(source: string, signal?: AbortSignal): Promise<{ bytes
   if (data) { const bytes = Buffer.from(data[2], "base64"); return { bytes, mime: detectedImageMime(bytes, data[1]) } }
   const url = new URL(source)
   if (!["http:", "https:"].includes(url.protocol)) throw new Error(`Provider returned an unsupported image URL protocol: ${url.protocol}`)
-  const response = await fetch(url, { signal: requestSignal(120_000, signal) })
+  const response = await fetch(url, { signal: signal })
   if (!response.ok) throw await responseError(response)
   const bytes = Buffer.from(await response.arrayBuffer())
   if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("Provider image exceeds 50 MiB.")
@@ -399,7 +392,7 @@ async function callOpenAi(request: ApiVaultRequest, model: string, messages: Mes
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify(body),
-    signal: requestSignal(120_000, signal),
+    signal: signal,
   })
   if (!response.ok) throw await responseError(response)
   if ((response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
@@ -458,7 +451,7 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   if (system) body.systemInstruction = { parts: [{ text: system }] }
   if (tools.length) body.tools = [{ functionDeclarations: tools.map((tool) => (tool as { function: unknown }).function) }]
   if (request.reasoning !== "default") body.generationConfig = { thinkingConfig: { thinkingLevel: request.reasoning.toUpperCase() } }
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: requestSignal(120_000, signal) })
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: signal })
   if (!response.ok) throw await responseError(response)
   if (!(response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
     const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
@@ -515,7 +508,7 @@ async function runImageRequest(request: ApiVaultRequest, model: string, signal?:
     const generationConfig: Record<string, unknown> = { responseModalities: ["TEXT", "IMAGE"] }
     if (ratio !== "auto") generationConfig.imageConfig = { aspectRatio: ratio }
     const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig }
-    const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: requestSignal(120_000, signal) })
+    const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: signal })
     if (!response.ok) throw await responseError(response)
     const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }> } }> }
     const parts = raw.candidates?.[0]?.content?.parts || []
@@ -548,7 +541,7 @@ async function runImageRequest(request: ApiVaultRequest, model: string, signal?:
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify(body),
-    signal: requestSignal(120_000, signal),
+    signal: signal,
   })
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as { id?: string; model?: string; data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>; error?: { message?: string } }
@@ -705,7 +698,7 @@ async function fetchThrough9Router(request: ApiVaultRequest, url: string, format
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify({ url: target.href, format, output_format: format, max_chars: maxChars, model: "jina-reader" }),
-    signal: requestSignal(30_000, signal),
+    signal: signal,
   })
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as Record<string, unknown>
@@ -729,7 +722,7 @@ async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue
   const format: WebFetchFormat = ["markdown", "text", "html", "json"].includes(String(formatValue)) ? formatValue as WebFetchFormat : "markdown"
   const maxChars = typeof maxValue === "number" && Number.isFinite(maxValue) ? Math.max(1000, Math.min(100_000, Math.floor(maxValue))) : 20_000
   const checkedUrl = validateWebFetchUrl(rawUrl).href
-  const fetchSignal = requestSignal(30_000, signal)
+  const fetchSignal = signal
   if (request.provider !== "9router") {
     return { ...(await fetchWebResource(checkedUrl, format, maxChars, fetchSignal)), source: "local/native" }
   }
@@ -855,7 +848,7 @@ export async function runApiVault(
         let result: { content: string; file?: string }
         if (call.function.name === "web_fetch") {
           if (typeof args.url !== "string" || !args.url.trim()) throw new Error("web_fetch requires a URL.")
-          const fetched = await withToolTimeout(runWebFetch(request, args.url, args.format, args.max_chars, control.signal), 30_000, control.signal)
+          const fetched = await withToolCancellation(runWebFetch(request, args.url, args.format, args.max_chars, control.signal), control.signal)
           result = { content: JSON.stringify(fetched) }
         } else if (call.function.name === "image_generate") {
           if (typeof args.prompt !== "string" || !args.prompt.length) throw new Error("image_generate requires a prompt.")
@@ -871,12 +864,12 @@ export async function runApiVault(
             imageAspectRatio: (["auto", "1:1", "9:16", "16:9", "2:3", "3:2"].includes(String(args.aspect_ratio)) ? String(args.aspect_ratio) : request.imageAspectRatio || "auto") as ApiVaultRequest["imageAspectRatio"],
             prompt: args.prompt, systemInstruction: "", assets: [], outputKind: "image", outputDirectory, executionMode: "independent",
           }
-          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel, control.signal), 120_000, control.signal)
+          const generated = await withToolCancellation(runImageRequest(imageRequest, selectedImageModel, control.signal), control.signal)
           const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources, control.signal)
           saved.forEach((file) => files.push(file))
           result = { content: JSON.stringify({ generated: true, model: generated.model, files: saved, note: "The explicit image prompt was sent unchanged." }), file: saved[0] }
         } else {
-          result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args), TOOL_TIMEOUT_MS, control.signal)
+          result = await withToolCancellation(executeFilesystemTool(context, call.function.name, args), control.signal)
         }
         if (result.file) {
           if (!files.includes(result.file)) files.push(result.file)
