@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { access, mkdir, readFile as readTextFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises"
+import { access, mkdir, readFile as readTextFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { parseDocument } from "./documents.js"
