@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { ApiModelCatalogItem, ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultModelCatalogs, ApiVaultProgressEvent, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ConversationMode, ReasoningLevel } from "../shared/api-vault"
+import type { ApiModelCatalogItem, ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultModelCatalogs, ApiVaultProgressEvent, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ApiVaultTelegramStatus, ConversationMode, ReasoningLevel } from "../shared/api-vault"
 import { REASONING_LEVELS } from "../shared/api-vault"
 import { parsePromptText } from "../shared/prompt-file"
 
@@ -60,6 +60,10 @@ export function ApiVaultView() {
   const [runError, setRunError] = useState("")
   const [progressEvents, setProgressEvents] = useState<ApiVaultProgressEvent[]>([])
   const [streamedText, setStreamedText] = useState("")
+  const [telegramSettings, setTelegramSettings] = useState<NonNullable<ApiVaultSettings["telegram"]>>({ botToken: "", enabled: false, approvedChats: [] })
+  const [telegramTokenInput, setTelegramTokenInput] = useState("")
+  const [telegramStatus, setTelegramStatus] = useState<ApiVaultTelegramStatus>({ running: false, candidates: [], approvedChats: [] })
+  const [telegramBusy, setTelegramBusy] = useState(false)
   const activeRunIds = useRef(new Set<string>())
   const prompts = useMemo(() => parsePromptText(prompt), [prompt])
 
@@ -89,6 +93,15 @@ export function ApiVaultView() {
           setImageModelOptions((current) => Object.fromEntries(PROVIDERS.map((item) => [item.value, settings.value!.modelCatalogs?.[item.value]?.image.map((model) => model.id) || current[item.value]])) as Record<ApiProvider, string[]>)
         }
         if (settings.value.executionMode) setExecutionMode(settings.value.executionMode === "prompt" ? "independent" : settings.value.executionMode)
+        if (settings.value.telegram) {
+          setTelegramSettings(settings.value.telegram)
+          setTelegramTokenInput(settings.value.telegram.botToken || "")
+          if (settings.value.telegram.enabled && settings.value.telegram.botToken) {
+            const remote = await window.autoPrompt.startApiVaultTelegram(settings.value)
+            if (remote.ok) setTelegramStatus(remote.value)
+            else setTelegramStatus((current) => ({ ...current, running: false, lastError: remote.error }))
+          }
+        }
         if (settings.value.conversationMode) setConversationMode(settings.value.conversationMode)
         const savedModel = settings.value.providers[settings.value.activeProvider]?.model
         if (savedModel && !settings.value.modelCatalogs?.[settings.value.activeProvider]?.chat.length) setModelOptions((current) => ({ ...current, [settings.value!.activeProvider]: [savedModel] }))
@@ -115,13 +128,109 @@ export function ApiVaultView() {
   useEffect(() => {
     if (!settingsLoaded) return
     const timer = window.setTimeout(() => {
-      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs }
-      void window.autoPrompt.saveApiVaultSettings(settings).then((result) => {
+      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs, telegram: telegramSettings }
+      void window.autoPrompt.saveApiVaultSettings(settings).then(async (result) => {
         if (!result.ok) setStatus(`Settings were not saved: ${result.error}`)
+        else if (telegramSettings.enabled) {
+          const remote = await window.autoPrompt.updateApiVaultTelegramSettings(settings)
+          if (remote.ok) setTelegramStatus(remote.value)
+        }
       })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [provider, profiles, executionMode, conversationMode, modelCatalogs, settingsLoaded])
+  }, [provider, profiles, executionMode, conversationMode, modelCatalogs, telegramSettings, settingsLoaded])
+
+  useEffect(() => {
+    let stopped = false
+    const refresh = async () => {
+      const result = await window.autoPrompt.getApiVaultTelegramStatus()
+      if (!stopped && result.ok) setTelegramStatus(result.value)
+    }
+    void refresh()
+    if (telegramSettings.enabled || telegramStatus.running) {
+      const timer = window.setInterval(() => { void refresh() }, 2_000)
+      return () => { stopped = true; window.clearInterval(timer) }
+    }
+    return () => { stopped = true }
+  }, [telegramSettings.enabled, telegramStatus.running])
+
+  const connectTelegram = async () => {
+    const token = telegramTokenInput.trim()
+    if (!token) { setTelegramStatus((current) => ({ ...current, lastError: "Enter the Telegram BotFather token first." })); return }
+    setTelegramBusy(true)
+    try {
+      const validation = await window.autoPrompt.validateApiVaultTelegramBot(token)
+      if (!validation.ok) { setTelegramStatus((current) => ({ ...current, lastError: validation.error })); return }
+      const nextTelegram = {
+        ...telegramSettings,
+        botToken: token,
+        enabled: true,
+        botId: validation.value.id,
+        botName: validation.value.firstName,
+        botUsername: validation.value.username,
+      }
+      const nextSettings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs, telegram: nextTelegram }
+      setTelegramSettings(nextTelegram)
+      const connected = await window.autoPrompt.startApiVaultTelegram(nextSettings)
+      if (!connected.ok) {
+        setTelegramSettings((current) => ({ ...current, enabled: false }))
+        setTelegramStatus((current) => ({ ...current, running: false, lastError: connected.error }))
+        return
+      }
+      setTelegramStatus(connected.value)
+      setStatus("Telegram bot connected. Open a pairing window and approve users from this desktop.")
+      const saved = await window.autoPrompt.saveApiVaultSettings(nextSettings)
+      if (!saved.ok) setTelegramStatus((current) => ({ ...current, lastError: "Connected for this session, but secure settings were not saved: " + saved.error }))
+    } finally { setTelegramBusy(false) }
+  }
+
+  const openTelegramPairing = async () => {
+    setTelegramBusy(true)
+    try {
+      if (!telegramStatus.running) {
+        const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs, telegram: { ...telegramSettings, botToken: telegramTokenInput.trim() || telegramSettings.botToken, enabled: true } }
+        const connected = await window.autoPrompt.startApiVaultTelegram(settings)
+        if (!connected.ok) { setTelegramStatus((current) => ({ ...current, lastError: connected.error })); return }
+        setTelegramStatus(connected.value)
+      }
+      const pairing = await window.autoPrompt.beginApiVaultTelegramPairing()
+      if (pairing.ok) setTelegramStatus(pairing.value)
+      else setTelegramStatus((current) => ({ ...current, lastError: pairing.error }))
+    } finally { setTelegramBusy(false) }
+  }
+
+  const approveTelegramPair = async (userId: number, chatId: number) => {
+    setTelegramBusy(true)
+    try {
+      const approval = await window.autoPrompt.approveApiVaultTelegramCandidate(userId, chatId)
+      if (!approval.ok) { setTelegramStatus((current) => ({ ...current, lastError: approval.error })); return }
+      setTelegramStatus(approval.value)
+      setTelegramSettings((current) => ({ ...current, approvedChats: approval.value.approvedChats }))
+    } finally { setTelegramBusy(false) }
+  }
+
+  const revokeTelegramPair = async (userId: number, chatId: number) => {
+    const approvedChats = telegramSettings.approvedChats.filter((item) => !(item.userId === userId && item.chatId === chatId))
+    const nextTelegram = { ...telegramSettings, approvedChats }
+    const nextSettings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs, telegram: nextTelegram }
+    const result = await window.autoPrompt.updateApiVaultTelegramSettings(nextSettings)
+    if (!result.ok) { setTelegramStatus((current) => ({ ...current, lastError: result.error })); return }
+    setTelegramStatus(result.value)
+    setTelegramSettings(nextTelegram)
+  }
+
+  const disconnectTelegram = async () => {
+    setTelegramBusy(true)
+    try {
+      await window.autoPrompt.disconnectApiVaultTelegram()
+      const empty = { botToken: "", enabled: false, approvedChats: [] }
+      setTelegramSettings(empty)
+      setTelegramTokenInput("")
+      setTelegramStatus({ running: false, candidates: [], approvedChats: [] })
+      setStatus("Telegram disconnected. The saved Bot API token and local allowlist were cleared.")
+      await window.autoPrompt.saveApiVaultSettings({ version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs, telegram: empty })
+    } finally { setTelegramBusy(false) }
+  }
 
   const changeProvider = (value: ApiProvider) => {
     setProvider(value)
