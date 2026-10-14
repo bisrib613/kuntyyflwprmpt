@@ -164,7 +164,7 @@ async function responseError(response: Response): Promise<Error> {
 }
 
 
-export type ApiVaultModelCatalogItem = { id: string; owned_by?: string; outputType: "text" | "image" }
+export type ApiVaultModelCatalogItem = ApiModelCatalogItem
 
 export async function listApiVaultModelCatalog(
   provider: ApiProvider, endpoint: string, apiKey: string, outputType: "text" | "image" = "text",
@@ -181,11 +181,52 @@ export async function listApiVaultModelCatalog(
   })
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as { data?: Array<{ id?: string; owned_by?: string }>; models?: Array<{ name?: string; displayName?: string }> }
-  const values = provider === "gemini"
+  const values: ApiVaultModelCatalogItem[] = provider === "gemini"
     ? (raw.models || []).flatMap((item) => item.name ? [{ id: item.name.replace(/^models\//, ""), outputType }] : [])
     : (raw.data || []).flatMap((item) => item.id ? [{ id: item.id, owned_by: item.owned_by, outputType }] : [])
-  const distinct = new Map(values.map((item) => [item.id, item]))
-  return [...distinct.values()].sort((left, right) => left.id.localeCompare(right.id)).slice(0, 500)
+  const distinct = [...new Map(values.map((item) => [item.id, item])).values()]
+    .sort((left, right) => left.id.localeCompare(right.id)).slice(0, 500)
+
+  // 9Router exposes capability metadata separately. Treat missing/unknown values as unknown;
+  // do not infer request compatibility from a model's display name.
+  if (provider !== "9router") return distinct
+  const enriched: ApiVaultModelCatalogItem[] = []
+  for (let index = 0; index < distinct.length; index += 8) {
+    const batch = distinct.slice(index, index + 8)
+    const results = await Promise.all(batch.map(async (item) => {
+      try {
+        const infoUrl = `${base}/models/info?id=${encodeURIComponent(item.id)}`
+        const infoResponse = await fetch(infoUrl, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) })
+        if (!infoResponse.ok) return item
+        const envelope = await infoResponse.json() as Record<string, unknown>
+        const info = envelope.data && typeof envelope.data === "object" ? envelope.data as Record<string, unknown>
+          : envelope.model && typeof envelope.model === "object" ? envelope.model as Record<string, unknown> : envelope
+        const rawCaps = info.capabilities && typeof info.capabilities === "object" ? info.capabilities as Record<string, unknown> : {}
+        const normalize = (...keys: string[]): boolean | "unknown" => {
+          for (const key of keys) {
+            const value = rawCaps[key] ?? info[key]
+            if (typeof value === "boolean") return value
+          }
+          return "unknown"
+        }
+        return {
+          ...item,
+          owned_by: item.owned_by || (typeof info.owned_by === "string" ? info.owned_by : undefined),
+          capabilities: {
+            textInput: normalize("textInput", "text_input", "supports_text_input"),
+            imageInput: normalize("imageInput", "image_input", "supports_image_input", "vision"),
+            imageGeneration: normalize("imageGeneration", "image_generation", "supports_image_generation"),
+            toolCalling: normalize("toolCalling", "tool_calling", "supports_tool_calling"),
+            structuredOutput: normalize("structuredOutput", "structured_output", "supports_structured_output"),
+          },
+        }
+      } catch {
+        return item
+      }
+    }))
+    enriched.push(...results)
+  }
+  return enriched
 }
 
 export async function listApiVaultModels(provider: ApiProvider, endpoint: string, apiKey: string): Promise<string[]> {
