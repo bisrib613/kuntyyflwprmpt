@@ -397,6 +397,33 @@ export function ApiVaultView() {
         ? <>Agent uses tools and saves each completed turn to the selected conversation.</>
         : <>Independent uses the full primary agent in an unsaved branch. A selected conversation is loaded as context without changing its saved history.</>}</p></>}
       {outputKind === "image" && <p className="field-help">Direct Image runs each prompt independently and does not use conversation history, system instructions, reasoning, or Chat assets.</p> }
+      <div className="section-heading vault-section"><span>03</span><div><h2>Telegram remote client</h2><p>Local runtime · private chats only</p></div></div>
+      <div className="telegram-settings">
+        <label>BotFather token<input type="password" autoComplete="off" value={telegramTokenInput} onChange={(event) => setTelegramTokenInput(event.target.value)} placeholder={telegramSettings.botUsername ? "Saved token for @" + telegramSettings.botUsername : "Paste bot token to validate and connect"} /></label>
+        <p className="field-help">The token is stored using Windows OS-backed protection. Pairing must be approved on this desktop; a Telegram message cannot authorize itself.</p>
+        <div className="conversation-actions">
+          <button className="secondary" disabled={telegramBusy || !telegramTokenInput.trim()} onClick={() => void connectTelegram()}>{telegramBusy ? "Working…" : "Validate & connect"}</button>
+          <button className="secondary" disabled={telegramBusy || !telegramStatus.running} onClick={() => void openTelegramPairing()}>Open 5-minute pairing</button>
+          <button className="danger-button" disabled={telegramBusy || (!telegramSettings.botToken && !telegramStatus.running)} onClick={() => void disconnectTelegram()}>Disconnect</button>
+        </div>
+        <p className="field-help" role="status">{telegramStatus.running ? "Connected" + (telegramStatus.bot?.username ? " · @" + telegramStatus.bot.username : telegramSettings.botUsername ? " · @" + telegramSettings.botUsername : "") : "Not connected"}{telegramStatus.pairingUntil ? " · Pairing closes " + new Date(telegramStatus.pairingUntil).toLocaleTimeString() : ""}</p>
+        {telegramStatus.lastError && <p className="field-help" role="alert">{telegramStatus.lastError}</p>}
+        {telegramStatus.candidates.length > 0 && <div className="conversation-manager">
+          <strong>Pending pairing approvals</strong>
+          {telegramStatus.candidates.map((candidate) => <div className="asset-chip" key={candidate.userId + ":" + candidate.chatId}>
+            <span className="asset-name">{[candidate.firstName, candidate.lastName].filter(Boolean).join(" ") || "Telegram user"}{candidate.username ? " · @" + candidate.username : ""}<small>User {candidate.userId} · Private chat {candidate.chatId}</small></span>
+            <button className="secondary" disabled={telegramBusy} onClick={() => void approveTelegramPair(candidate.userId, candidate.chatId)}>Approve</button>
+          </div>)}
+        </div>}
+        {telegramSettings.approvedChats.length > 0 && <div className="conversation-manager">
+          <strong>Authorized private chats</strong>
+          {telegramSettings.approvedChats.map((peer) => <div className="asset-chip" key={peer.userId + ":" + peer.chatId}>
+            <span className="asset-name">{[peer.firstName, peer.lastName].filter(Boolean).join(" ") || "Telegram user"}{peer.username ? " · @" + peer.username : ""}<small>User {peer.userId} · Private chat {peer.chatId}</small></span>
+            <button className="danger-button" disabled={telegramBusy} onClick={() => void revokeTelegramPair(peer.userId, peer.chatId)}>Revoke</button>
+          </div>)}
+        </div>}
+        <p className="field-help">Commands: <code>/mode agent</code>, <code>/mode prompt</code>, <code>/new</code>, <code>/conversations</code>, <code>/use id</code>, <code>/stop</code>. Attachments enter a controlled local inbox and use the same filesystem authorization rules.</p>
+      </div>
     </aside>
 
     <section className="vault-workspace">
