@@ -94,13 +94,18 @@ function htmlToText(html: string, markdown: boolean): { title: string; content: 
   return { title, content }
 }
 
-export async function fetchWebResource(rawUrl: string, format: WebFetchFormat = "markdown", maxChars = 20_000): Promise<{
+export async function fetchWebResource(
+  rawUrl: string,
+  format: WebFetchFormat = "markdown",
+  maxChars = 20_000,
+  signal?: AbortSignal,
+): Promise<{
   url: string
   status: number
   contentType: string
   title: string
   content: string
-}>, signal?: AbortSignal): Promise<{ url: string; status: number; contentType: string; title: string; content: string }> {
+}> {
   const limit = Math.max(1_000, Math.min(100_000, Number.isFinite(maxChars) ? Math.floor(maxChars) : 20_000))
   let current = validateWebFetchUrl(rawUrl)
   let usedCompatAgent = false
