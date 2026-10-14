@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ConversationMode, ReasoningLevel } from "../shared/api-vault"
+import type { ApiModelCatalogItem, ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultModelCatalogs, ApiVaultProgressEvent, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ConversationMode, ReasoningLevel } from "../shared/api-vault"
 import { REASONING_LEVELS } from "../shared/api-vault"
 import { parsePromptText } from "../shared/prompt-file"
 
@@ -21,19 +21,26 @@ function preferredResultView(text: string): ResultView {
 
 function defaultProfiles(): Record<ApiProvider, ApiVaultProviderSettings> {
   return Object.fromEntries(PROVIDERS.map((item) => [item.value, {
-    endpoint: item.endpoint, apiKey: "", model: item.model, fallbackModel: "", reasoning: "default",
+    endpoint: item.endpoint, apiKey: "", model: item.model, imageModel: "", imageAspectRatio: "auto", fallbackModel: "", reasoning: "default",
   }])) as Record<ApiProvider, ApiVaultProviderSettings>
+}
+
+function defaultCatalogs(): ApiVaultModelCatalogs {
+  return Object.fromEntries(PROVIDERS.map((item) => [item.value, { chat: [], image: [] }])) as ApiVaultModelCatalogs
 }
 
 export function ApiVaultView() {
   const [provider, setProvider] = useState<ApiProvider>("9router")
   const [profiles, setProfiles] = useState(defaultProfiles)
   const profile = profiles[provider]
-  const { endpoint, apiKey, model, fallbackModel, reasoning } = profile
+  const { endpoint, apiKey, model, imageModel = "", imageAspectRatio = "auto", fallbackModel, reasoning } = profile
+  const selectedModel = outputKind === "image" ? imageModel : model
+  const [modelCatalogs, setModelCatalogs] = useState<ApiVaultModelCatalogs>(defaultCatalogs)
   const [modelOptions, setModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, item.model ? [item.model] : []])) as Record<ApiProvider, string[]>)
+  const [imageModelOptions, setImageModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, []])) as Record<ApiProvider, string[]>)
   const [customModel, setCustomModel] = useState(false)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
-  const [executionMode, setExecutionMode] = useState<"prompt" | "agent">("prompt")
+  const [executionMode, setExecutionMode] = useState<"independent" | "agent">("independent")
   const [outputKind, setOutputKind] = useState<ApiOutputKind>("text")
   const [outputDirectory, setOutputDirectory] = useState("")
   const [autoSaveResult, setAutoSaveResult] = useState(false)
@@ -70,11 +77,20 @@ export function ApiVaultView() {
       const [settings] = await Promise.all([window.autoPrompt.loadApiVaultSettings(), refreshConversations()])
       if (settings.ok && settings.value?.version === 1) {
         setProvider(settings.value.activeProvider)
-        setProfiles({ ...defaultProfiles(), ...settings.value.providers })
-        if (settings.value.executionMode) setExecutionMode(settings.value.executionMode)
+        const restoredProfiles = { ...defaultProfiles(), ...settings.value.providers }
+        for (const item of PROVIDERS) {
+          restoredProfiles[item.value] = { ...defaultProfiles()[item.value], ...settings.value.providers[item.value] }
+        }
+        setProfiles(restoredProfiles)
+        if (settings.value.modelCatalogs) {
+          setModelCatalogs(settings.value.modelCatalogs)
+          setModelOptions((current) => Object.fromEntries(PROVIDERS.map((item) => [item.value, settings.value!.modelCatalogs?.[item.value]?.chat.map((model) => model.id) || current[item.value]])) as Record<ApiProvider, string[]>)
+          setImageModelOptions((current) => Object.fromEntries(PROVIDERS.map((item) => [item.value, settings.value!.modelCatalogs?.[item.value]?.image.map((model) => model.id) || current[item.value]])) as Record<ApiProvider, string[]>)
+        }
+        if (settings.value.executionMode) setExecutionMode(settings.value.executionMode === "prompt" ? "independent" : settings.value.executionMode)
         if (settings.value.conversationMode) setConversationMode(settings.value.conversationMode)
         const savedModel = settings.value.providers[settings.value.activeProvider]?.model
-        if (savedModel) setModelOptions((current) => ({ ...current, [settings.value!.activeProvider]: [savedModel] }))
+        if (savedModel && !settings.value.modelCatalogs?.[settings.value.activeProvider]?.chat.length) setModelOptions((current) => ({ ...current, [settings.value!.activeProvider]: [savedModel] }))
       } else if (!settings.ok) setStatus(settings.error)
       setSettingsLoaded(true)
     })()
@@ -88,27 +104,40 @@ export function ApiVaultView() {
   useEffect(() => {
     if (!settingsLoaded) return
     const timer = window.setTimeout(() => {
-      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode }
+      const settings: ApiVaultSettings = { version: 1, activeProvider: provider, providers: profiles, executionMode, conversationMode, modelCatalogs }
       void window.autoPrompt.saveApiVaultSettings(settings).then((result) => {
         if (!result.ok) setStatus(`Settings were not saved: ${result.error}`)
       })
     }, 500)
     return () => window.clearTimeout(timer)
-  }, [provider, profiles, executionMode, conversationMode, settingsLoaded])
+  }, [provider, profiles, executionMode, conversationMode, modelCatalogs, settingsLoaded])
 
   const changeProvider = (value: ApiProvider) => {
     setProvider(value)
-    const nextModel = profiles[value].model
-    setCustomModel(!nextModel || !modelOptions[value].includes(nextModel))
+    const nextModel = outputKind === "image" ? (profiles[value].imageModel || "") : profiles[value].model
+    const options = outputKind === "image" ? imageModelOptions[value] : modelOptions[value]
+    setCustomModel(!nextModel || !options.includes(nextModel))
   }
 
   const refreshModels = async () => {
-    setStatus("Loading provider models…")
-    const result = await window.autoPrompt.listApiVaultModels(provider, endpoint, apiKey)
+    setStatus(`Loading ${outputKind === "image" ? "Image" : "Chat"} models…`)
+    const result = await window.autoPrompt.listApiVaultModelCatalog(provider, endpoint, apiKey, outputKind)
     if (!result.ok) return setStatus(result.error)
-    setModelOptions((current) => ({ ...current, [provider]: result.value }))
-    if (result.value.length && !result.value.includes(model)) { updateProfile({ model: result.value[0] }); setCustomModel(false) }
-    setStatus(`Loaded ${result.value.length} model${result.value.length === 1 ? "" : "s"}.`)
+    if (!result.value.length) return setStatus(`No valid ${outputKind === "image" ? "Image" : "Chat"} models were returned; the previous catalog is preserved.`)
+    const ids = result.value.map((item) => item.id)
+    setModelCatalogs((current) => ({
+      ...current,
+      [provider]: {
+        ...current[provider],
+        ...(outputKind === "image" ? { image: result.value, imageRefreshedAt: new Date().toISOString() } : { chat: result.value, chatRefreshedAt: new Date().toISOString() }),
+      },
+    }))
+    if (outputKind === "image") setImageModelOptions((current) => ({ ...current, [provider]: ids }))
+    else setModelOptions((current) => ({ ...current, [provider]: ids }))
+    // Keep the user's current model selection. Refreshing discovery must not silently substitute another model.
+    const currentSelection = outputKind === "image" ? imageModel : model
+    setCustomModel(!currentSelection || !ids.includes(currentSelection))
+    setStatus(`Loaded ${ids.length} ${outputKind === "image" ? "Image" : "Chat"} model${ids.length === 1 ? "" : "s"}.`)
   }
 
   const loadText = async (target: "system" | "prompt") => {
@@ -187,7 +216,7 @@ export function ApiVaultView() {
         setStatus(`Running prompt ${index + 1} of ${prompts.length}…`)
         const result = await window.autoPrompt.runApiVault({
           runId,
-          provider, endpoint, apiKey, model, fallbackModel: provider === "9router" ? fallbackModel : undefined,
+          provider, endpoint, apiKey, model: selectedModel, imageModel: imageModel || undefined, imageAspectRatio, fallbackModel: provider === "9router" ? fallbackModel : undefined,
           reasoning, outputKind, outputDirectory: outputKind === "image" ? outputDirectory : undefined,
           executionMode, conversationMode: conversationMode === "independent" ? "independent" : "continue",
           threadId: activeThreadId, systemInstruction, prompt: prompts[index], assets,
@@ -217,22 +246,23 @@ export function ApiVaultView() {
       <label>Provider<select value={provider} disabled={running} onChange={(event) => changeProvider(event.target.value as ApiProvider)}>{PROVIDERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
       <label>Base URL<input value={endpoint} disabled={running} onChange={(event) => updateProfile({ endpoint: event.target.value })} /></label>
       <label>API key<input type="password" autoComplete="off" value={apiKey} disabled={running} onChange={(event) => updateProfile({ apiKey: event.target.value })} placeholder={provider === "9router" ? "Optional when local auth is disabled" : "Required by provider"} /></label>
-      <label>Model<div className="model-picker"><select value={customModel ? "__custom__" : model} disabled={running} onChange={(event) => { if (event.target.value === "__custom__") setCustomModel(true); else { setCustomModel(false); updateProfile({ model: event.target.value }) } }}>{modelOptions[provider].map((value) => <option value={value} key={value}>{value}</option>)}<option value="__custom__">Custom model ID…</option></select><button className="secondary" type="button" disabled={running || !endpoint.trim()} onClick={() => void refreshModels()}>Refresh</button></div></label>
-      {customModel && <label>Custom model ID<input value={model} disabled={running} onChange={(event) => updateProfile({ model: event.target.value })} placeholder="Provider model ID" /></label>}
+      <label>Model<div className="model-picker"><select value={customModel ? "__custom__" : selectedModel} disabled={running} onChange={(event) => { if (event.target.value === "__custom__") setCustomModel(true); else { setCustomModel(false); updateProfile(outputKind === "image" ? { imageModel: event.target.value } : { model: event.target.value }) } }}>{(outputKind === "image" ? modelCatalogs[provider].image : modelCatalogs[provider].chat).map((item: ApiModelCatalogItem) => <option value={item.id} key={item.id}>{item.owned_by ? `${item.owned_by} · ${item.id}` : item.id}</option>)}{(outputKind === "image" ? imageModelOptions[provider] : modelOptions[provider]).filter((value) => !(outputKind === "image" ? modelCatalogs[provider].image : modelCatalogs[provider].chat).some((item) => item.id === value)).map((value) => <option value={value} key={value}>{value}</option>)}<option value="__custom__">Custom model ID…</option></select><button className="secondary" type="button" disabled={running || !endpoint.trim()} onClick={() => void refreshModels()}>Refresh</button></div></label>
+      {customModel && <label>Custom model ID<input value={selectedModel} disabled={running} onChange={(event) => updateProfile(outputKind === "image" ? { imageModel: event.target.value } : { model: event.target.value })} placeholder={outputKind === "image" ? "Image model ID" : "Chat model ID"} /></label>}
       {provider === "9router" && <label>Fallback model <span className="optional">Optional</span><input list="api-vault-model-options" value={fallbackModel} disabled={running} onChange={(event) => updateProfile({ fallbackModel: event.target.value })} placeholder="Used only after a provider error" /></label>}
       <datalist id="api-vault-model-options">{modelOptions[provider].map((value) => <option value={value} key={value} />)}</datalist>
       <label>Reasoning<select value={reasoning} disabled={running} onChange={(event) => updateProfile({ reasoning: event.target.value as ReasoningLevel })}>{REASONING_LEVELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
       <p className="field-help">Provider settings are saved per provider. API keys are protected by Windows.</p>
       <div className="section-heading vault-section"><span>02</span><div><h2>Runtime</h2><p>Context and tools</p></div></div>
-      <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => setOutputKind(event.target.value as ApiOutputKind)}><option value="text">Text / JSON</option><option value="image">Image</option></select></label>
+      <label>Output<select value={outputKind} disabled={running || executionMode === "agent"} onChange={(event) => setOutputKind(event.target.value as ApiOutputKind)}><option value="text">Chat</option><option value="image">Image</option></select></label>
       {outputKind === "image" && <div className="folder vault-folder"><span>{outputDirectory || "No image result folder selected"}</span><button disabled={running} onClick={() => void chooseOutputDirectory()}>Choose</button></div>}
+      {outputKind === "image" && <label>Aspect ratio<select value={imageAspectRatio} disabled={running} onChange={(event) => updateProfile({ imageAspectRatio: event.target.value as ApiVaultProviderSettings["imageAspectRatio"] })}><option value="auto">Auto</option><option value="1:1">1:1</option><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="2:3">2:3</option><option value="3:2">3:2</option></select></label>}
       {outputKind === "text" && <div className="result-save-settings">
         <label className="toggle-row"><span><strong>Auto-save result</strong><small>Run still works when no folder is selected</small></span><input type="checkbox" checked={autoSaveResult} disabled={running} onChange={(event) => setAutoSaveResult(event.target.checked)} /></label>
         <label>File format<select value={resultFormat} disabled={running} onChange={(event) => setResultFormat(event.target.value as ResultFormat)}><option value="auto">Auto-detect</option><option value="txt">TXT</option><option value="json">JSON</option></select></label>
         <label>Filename <span className="optional">Optional</span><input value={resultFilename} disabled={running} onChange={(event) => setResultFilename(event.target.value)} placeholder="Automatic when blank" /></label>
         <div className="folder vault-folder"><span>{resultDirectory || "No text result folder selected"}</span><button disabled={running} onClick={() => void chooseResultDirectory()}>Choose</button></div>
       </div>}
-      <label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "prompt" | "agent"; setExecutionMode(value); if (value === "agent") { setOutputKind("text"); setConversationMode("continue") } }}><option value="prompt">Prompt</option><option value="agent">Agent</option></select></label>
+      <label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "independent" | "agent"; setExecutionMode(value); if (value === "agent") { setOutputKind("text"); setConversationMode("continue") } }}><option value="independent">Independent</option><option value="agent">Agent</option></select></label>
       <label>Context<select value={conversationMode} disabled={running} onChange={(event) => { setConversationMode(event.target.value as ConversationMode); setThreadId("") }}><option value="independent">Independent</option><option value="continue">Conversation</option><option value="chain">Chain bulk prompts</option></select></label>
       {conversationMode !== "independent" && <div className="conversation-manager">
         <label>Conversation <span className="optional">Blank starts new</span><select value={threadId} disabled={running} onChange={(event) => { setThreadId(event.target.value); setResponse(null); setRunError("") }}><option value="">New conversation</option>{conversations.map((item) => <option value={item.id} key={item.id}>{item.title} · {item.turnCount} turn{item.turnCount === 1 ? "" : "s"}</option>)}</select></label>
