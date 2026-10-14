@@ -205,6 +205,12 @@ export async function listApiVaultModelCatalog(
         const info = envelope.data && typeof envelope.data === "object" ? envelope.data as Record<string, unknown>
           : envelope.model && typeof envelope.model === "object" ? envelope.model as Record<string, unknown> : envelope
         const rawCaps = info.capabilities && typeof info.capabilities === "object" ? info.capabilities as Record<string, unknown> : {}
+        const parameterSource = info.supported_parameters ?? info.supportedParameters ?? info.parameters
+        const supportedParameters = Array.isArray(parameterSource)
+          ? parameterSource.filter((value): value is string => typeof value === "string")
+          : parameterSource && typeof parameterSource === "object"
+            ? Object.keys(parameterSource as Record<string, unknown>)
+            : []
         const normalize = (...keys: string[]): boolean | "unknown" => {
           for (const key of keys) {
             const value = rawCaps[key] ?? info[key]
@@ -215,6 +221,7 @@ export async function listApiVaultModelCatalog(
         return {
           ...item,
           owned_by: item.owned_by || (typeof info.owned_by === "string" ? info.owned_by : undefined),
+          supportedParameters,
           capabilities: {
             textInput: normalize("textInput", "text_input", "supports_text_input"),
             imageInput: normalize("imageInput", "image_input", "supports_image_input", "vision"),
