@@ -34,7 +34,6 @@ export function ApiVaultView() {
   const [profiles, setProfiles] = useState(defaultProfiles)
   const profile = profiles[provider]
   const { endpoint, apiKey, model, imageModel = "", imageAspectRatio = "auto", fallbackModel, reasoning } = profile
-  const selectedModel = outputKind === "image" ? imageModel : model
   const [modelCatalogs, setModelCatalogs] = useState<ApiVaultModelCatalogs>(defaultCatalogs)
   const [modelOptions, setModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, item.model ? [item.model] : []])) as Record<ApiProvider, string[]>)
   const [imageModelOptions, setImageModelOptions] = useState<Record<ApiProvider, string[]>>(() => Object.fromEntries(PROVIDERS.map((item) => [item.value, []])) as Record<ApiProvider, string[]>)
@@ -42,6 +41,7 @@ export function ApiVaultView() {
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [executionMode, setExecutionMode] = useState<"independent" | "agent">("independent")
   const [outputKind, setOutputKind] = useState<ApiOutputKind>("text")
+  const selectedModel = outputKind === "image" ? imageModel : model
   const [outputDirectory, setOutputDirectory] = useState("")
   const [autoSaveResult, setAutoSaveResult] = useState(false)
   const [resultDirectory, setResultDirectory] = useState("")
@@ -95,6 +95,12 @@ export function ApiVaultView() {
       setSettingsLoaded(true)
     })()
   }, [])
+
+  useEffect(() => {
+    const currentSelection = outputKind === "image" ? imageModel : model
+    const options = outputKind === "image" ? imageModelOptions[provider] : modelOptions[provider]
+    setCustomModel(!currentSelection || !options.includes(currentSelection))
+  }, [outputKind, provider, imageModel, model, imageModelOptions, modelOptions])
 
   useEffect(() => window.autoPrompt.onApiVaultProgress((event) => {
     if (!activeRunIds.current.has(event.runId)) return
