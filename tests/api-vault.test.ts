@@ -77,7 +77,7 @@ describe("API Vault model catalogs", () => {
     vi.stubGlobal("fetch", fetchMock)
     await expect(listApiVaultModelCatalog("9router", "http://localhost:20128/v1", "test-key", "image"))
       .resolves.toEqual([{
-        id: "ag/image-model", owned_by: "antigravity", outputType: "image",
+        id: "ag/image-model", owned_by: "antigravity", outputType: "image", supportedParameters: [],
         capabilities: {
           textInput: "unknown", imageInput: "unknown", imageGeneration: true,
           toolCalling: false, structuredOutput: "unknown",
