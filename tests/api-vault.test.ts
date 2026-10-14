@@ -67,12 +67,22 @@ describe("API Vault model catalogs", () => {
 
   it("loads the separate 9Router image catalog and preserves owned_by", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
-      expect(String(url)).toBe("http://localhost:20128/v1/models/image")
-      return new Response(JSON.stringify({ data: [{ id: "ag/image-model", owned_by: "antigravity" }] }), { status: 200, headers: { "content-type": "application/json" } })
+      const address = String(url)
+      if (address === "http://localhost:20128/v1/models/image") {
+        return new Response(JSON.stringify({ data: [{ id: "ag/image-model", owned_by: "antigravity" }] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      expect(address).toBe("http://localhost:20128/v1/models/info?id=ag%2Fimage-model")
+      return new Response(JSON.stringify({ data: { capabilities: { image_generation: true, tool_calling: false } } }), { status: 200, headers: { "content-type": "application/json" } })
     })
     vi.stubGlobal("fetch", fetchMock)
     await expect(listApiVaultModelCatalog("9router", "http://localhost:20128/v1", "test-key", "image"))
-      .resolves.toEqual([{ id: "ag/image-model", owned_by: "antigravity", outputType: "image" }])
+      .resolves.toEqual([{
+        id: "ag/image-model", owned_by: "antigravity", outputType: "image",
+        capabilities: {
+          textInput: "unknown", imageInput: "unknown", imageGeneration: true,
+          toolCalling: false, structuredOutput: "unknown",
+        },
+      }])
   })
 
   it("does not mislabel the Gemini text catalog as an Image catalog", async () => {
