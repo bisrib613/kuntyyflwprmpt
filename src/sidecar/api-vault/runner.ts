@@ -427,7 +427,7 @@ export async function runApiVault(
   const runId = validRunId(request.runId) ? request.runId : randomUUID()
   const trace: AgentTraceEntry[] = []
   const files: string[] = []
-  let model = routedModel(request.model, request.provider, request.reasoning)
+  let model = routedModel(request.outputKind === "image" ? (request.imageModel?.trim() || request.model) : request.model, request.provider, request.reasoning)
   if (request.outputKind === "image") {
     onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
     let generated: Awaited<ReturnType<typeof runImageRequest>>
