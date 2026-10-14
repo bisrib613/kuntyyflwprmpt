@@ -6,6 +6,7 @@ import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
 import type { ApiVaultProgressEvent, ApiVaultRequest } from "../shared/api-vault.js"
 import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModelCatalog, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import { approveApiVaultTelegramCandidate, beginApiVaultTelegramPairing, disconnectApiVaultTelegram, getApiVaultTelegramStatus, startApiVaultTelegram, updateApiVaultTelegramSettings, validateApiVaultTelegramBot } from "./api-vault/telegram.js"
 import type { ApiProvider } from "../shared/api-vault.js"
 import { videoSettingsError } from "../shared/video-settings.js"
 
@@ -123,6 +124,32 @@ async function request(method: string, params: unknown): Promise<unknown> {
         throw error
       }
     }
+    case "api-vault:telegram:validate": {
+      const token = typeof input.token === "string" ? input.token : ""
+      return validateApiVaultTelegramBot(token)
+    }
+    case "api-vault:telegram:start": {
+      const settings = input.settings as import("../shared/api-vault.js").ApiVaultSettings | undefined
+      if (!settings || typeof settings !== "object") throw new Error("API Vault settings are required to connect Telegram.")
+      return startApiVaultTelegram(installDirectory, settings)
+    }
+    case "api-vault:telegram:pairing:start":
+      return beginApiVaultTelegramPairing()
+    case "api-vault:telegram:status":
+      return getApiVaultTelegramStatus()
+    case "api-vault:telegram:approve": {
+      const userId = typeof input.userId === "number" ? input.userId : Number(input.userId)
+      const chatId = typeof input.chatId === "number" ? input.chatId : Number(input.chatId)
+      if (!Number.isSafeInteger(userId) || !Number.isSafeInteger(chatId)) throw new Error("Telegram user and chat IDs must be valid integers.")
+      return approveApiVaultTelegramCandidate(userId, chatId)
+    }
+    case "api-vault:telegram:update-settings": {
+      const settings = input.settings as import("../shared/api-vault.js").ApiVaultSettings | undefined
+      if (!settings || typeof settings !== "object") throw new Error("API Vault settings are required.")
+      return updateApiVaultTelegramSettings(settings)
+    }
+    case "api-vault:telegram:disconnect":
+      return disconnectApiVaultTelegram()
     case "api-vault:model-catalog": {
       const provider = input.provider as ApiProvider
       const endpoint = typeof input.endpoint === "string" ? input.endpoint : ""
