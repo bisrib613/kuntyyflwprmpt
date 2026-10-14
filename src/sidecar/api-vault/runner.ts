@@ -651,13 +651,15 @@ async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue
   const format: WebFetchFormat = ["markdown", "text", "html", "json"].includes(String(formatValue)) ? formatValue as WebFetchFormat : "markdown"
   const maxChars = typeof maxValue === "number" && Number.isFinite(maxValue) ? Math.max(1000, Math.min(100_000, Math.floor(maxValue))) : 20_000
   const checkedUrl = validateWebFetchUrl(rawUrl).href
+  const fetchSignal = requestSignal(30_000, signal)
   if (request.provider !== "9router") {
-    return { ...(await fetchWebResource(checkedUrl, format, maxChars, signal)), source: "local/native" }
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars, fetchSignal)), source: "local/native" }
   }
   try {
-    return { ...(await fetchWebResource(checkedUrl, format, maxChars, signal)), source: "local/native" }
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars, fetchSignal)), source: "local/native" }
   } catch (nativeError) {
-    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars, signal) }
+    if (signal?.aborted) throw nativeError
+    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars, fetchSignal) }
     catch (routerError) {
       const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError)
       const routerMessage = routerError instanceof Error ? routerError.message : String(routerError)
