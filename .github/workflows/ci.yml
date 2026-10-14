@@ -62,19 +62,32 @@ jobs:
           if (-not $app) { throw "Installed application executable was not found." }
 
           $process = Start-Process $app.FullName -PassThru
-          Start-Sleep -Seconds 10
-          if ($process.HasExited) {
-            Get-ChildItem (Join-Path $app.DirectoryName "logs") -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName }
-            throw "Installed application exited during the startup smoke test (exit code $($process.ExitCode))."
-          }
           $startupLog = Join-Path $app.DirectoryName "logs/startup.log"
+          $deadline = (Get-Date).AddSeconds(25)
+          $startupOutput = ""
+          while ((Get-Date) -lt $deadline) {
+            if ($process.HasExited) {
+              Get-ChildItem (Join-Path $app.DirectoryName "logs") -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName }
+              throw "Installed application exited during the startup smoke test (exit code $($process.ExitCode))."
+            }
+            if (Test-Path $startupLog) {
+              $startupOutput = Get-Content $startupLog -Raw -ErrorAction SilentlyContinue
+              if ($startupOutput -match "Automation runtime is ready\." -or $startupOutput -match "Automation runtime is unavailable:") {
+                break
+              }
+            }
+            Start-Sleep -Seconds 1
+          }
           if (-not (Test-Path $startupLog)) { throw "Application startup log was not created." }
           if ($startupLog -notlike "$($app.DirectoryName)*") { throw "Application logs were not written inside the installation directory." }
           $startupOutput = Get-Content $startupLog -Raw
           Write-Host $startupOutput
+          if ($startupOutput -match "Automation runtime is unavailable:") {
+            throw "Installed application opened, but its automation runtime failed to start. See startup.log above for the reason."
+          }
           if ($startupOutput -notmatch "Automation runtime is ready\.") {
-            throw "Installed application opened, but its automation runtime did not become ready."
+            throw "Installed application startup was not confirmed within 25 seconds."
           }
           Stop-Process -Id $process.Id -Force
 

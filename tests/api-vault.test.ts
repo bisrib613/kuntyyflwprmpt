@@ -124,6 +124,32 @@ describe("API Vault model catalogs", () => {
 describe("API Vault agent loop", () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it("explains a 9Router model-request timeout in plain language", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-timeout-"))
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout") }))
+    const request: ApiVaultRequest = {
+      provider: "9router", endpoint: "http://localhost:20128/v1", apiKey: "local", model: "ag/test-model",
+      reasoning: "default", outputKind: "text", executionMode: "prompt", conversationMode: "independent",
+      systemInstruction: "", prompt: "6", assets: [],
+    }
+    await expect(runApiVault(install, request)).rejects.toThrow(
+      "The model request to 9Router timed out after 120 seconds. Make sure 9Router is running and the selected model is available, then try again.",
+    )
+  })
+
+  it("does not blame 9Router when another provider request times out", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-timeout-provider-"))
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout") }))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "prompt", conversationMode: "independent",
+      systemInstruction: "", prompt: "6", assets: [],
+    }
+    await expect(runApiVault(install, request)).rejects.toThrow(
+      "The model request to configured provider timed out after 120 seconds. Check the Base URL and model availability, then try again.",
+    )
+  })
+
   it("executes a provider tool call and returns the final provider response", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-agent-"))
     let requestCount = 0
