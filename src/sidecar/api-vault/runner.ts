@@ -659,19 +659,33 @@ export async function runApiVault(
   const files: string[] = []
   let model = request.outputKind === "image" ? (request.imageModel?.trim() || request.model) : routedModel(request.model, request.provider, request.reasoning)
   if (request.outputKind === "image") {
-    onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
-    let generated: Awaited<ReturnType<typeof runImageRequest>>
+    const imageStateDirectory = resolve(installDirectory, "data", "api-vault")
+    await mkdir(imageStateDirectory, { recursive: true })
+    const imageArtifacts: AgentArtifactState[] = []
+    await persistRunState(imageStateDirectory, runId, "running", "Generating requested image", 0, imageArtifacts)
     try {
-      generated = await runImageRequest(request, model, control.signal)
+      onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
+      let generated: Awaited<ReturnType<typeof runImageRequest>>
+      try {
+        generated = await runImageRequest(request, model, control.signal)
+      } catch (error) {
+        if (control.signal?.aborted || request.provider !== "9router" || !request.fallbackModel?.trim() || model === request.fallbackModel.trim()) throw error
+        model = request.fallbackModel.trim()
+        generated = await runImageRequest(request, model, control.signal)
+      }
+      const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
+      for (const file of generatedFiles) {
+        files.push(file)
+        imageArtifacts.push(await observeArtifact(installDirectory, file, "created"))
+        onProgress({ runId, phase: "tool-succeeded", tool: "save_image", file, message: `Saved ${file}.` })
+      }
+      await persistRunState(imageStateDirectory, runId, "completed", "Image generation completed", 1, imageArtifacts)
+      onProgress({ runId, phase: "completed", message: "Image generation completed." })
+      return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
     } catch (error) {
-      if (control.signal?.aborted || request.provider !== "9router" || !request.fallbackModel?.trim() || model === request.fallbackModel.trim()) throw error
-      model = request.fallbackModel.trim()
-      generated = await runImageRequest(request, model, control.signal)
+      await persistRunState(imageStateDirectory, runId, "failed", control.signal?.aborted ? "Image generation was cancelled" : "Image generation failed", 0, imageArtifacts).catch(() => undefined)
+      throw error
     }
-    const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
-    generatedFiles.forEach((file) => onProgress({ runId, phase: "tool-succeeded", tool: "save_image", file, message: `Saved ${file}.` }))
-    onProgress({ runId, phase: "completed", message: "Image generation completed." })
-    return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
   }
   const dataDirectory = resolve(installDirectory, "data", "api-vault")
   await mkdir(dataDirectory, { recursive: true })
