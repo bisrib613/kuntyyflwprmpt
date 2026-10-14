@@ -805,7 +805,7 @@ export async function runApiVault(
     throw new Error("Provider returned an empty final response.")
   }
   finalText = cleanFileCompletion(finalText, files, request.prompt)
-  const persistsConversation = request.executionMode === "agent" && request.conversationMode !== "independent"
+  const persistsConversation = request.executionMode === "agent"
   if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
   const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
   await persistRunState(dataDirectory, runId, "completed", "Requested task completed", iteration, artifactStates)
