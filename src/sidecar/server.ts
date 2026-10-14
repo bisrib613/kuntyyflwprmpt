@@ -5,7 +5,7 @@ import { QueueRunner } from "../main/automation/queue-runner.js"
 import { listFlowpilotAccounts } from "../main/session/flowpilot.js"
 import { logAutomation, logCrash, logDirectory } from "./logger.js"
 import type { ApiVaultProgressEvent, ApiVaultRequest } from "../shared/api-vault.js"
-import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
+import { deleteApiVaultConversation, listApiVaultConversations, listApiVaultModelCatalog, listApiVaultModels, runApiVault } from "./api-vault/runner.js"
 import type { ApiProvider } from "../shared/api-vault.js"
 import { videoSettingsError } from "../shared/video-settings.js"
 
@@ -122,6 +122,14 @@ async function request(method: string, params: unknown): Promise<unknown> {
         if (settings.runId) emitApiVault({ runId: settings.runId, phase: "failed", message })
         throw error
       }
+    }
+    case "api-vault:model-catalog": {
+      const provider = input.provider as ApiProvider
+      const endpoint = typeof input.endpoint === "string" ? input.endpoint : ""
+      const apiKey = typeof input.apiKey === "string" ? input.apiKey : ""
+      const outputType = input.outputType === "image" ? "image" : "text"
+      if (!["gemini", "openai", "9router", "custom"].includes(provider) || !endpoint) throw new Error("Provider and endpoint are required to list a model catalog.")
+      return listApiVaultModelCatalog(provider, endpoint, apiKey, outputType)
     }
     case "api-vault:models": {
       const provider = input.provider as ApiProvider
