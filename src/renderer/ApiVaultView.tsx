@@ -279,7 +279,17 @@ export function ApiVaultView() {
   const refreshModels = async () => {
     setStatus(`Loading ${outputKind === "image" ? "Image" : "Chat"} models…`)
     const result = await window.autoPrompt.listApiVaultModelCatalog(provider, endpoint, apiKey, outputKind)
-    if (!result.ok) return setStatus(result.error)
+    if (!result.ok) {
+      const detail = result.error
+      const networkFailure = /fetch failed|failed to fetch|networkerror|could not connect|connection refused|econnrefused|timed out/i.test(detail)
+      if (networkFailure && provider === "9router") {
+        return setStatus(`Cannot reach 9Router. Make sure 9Router is running and the Base URL/port are correct. Details: ${detail}`)
+      }
+      if (networkFailure) {
+        return setStatus(`Cannot reach the ${provider} API. Check the Base URL and network connection. Details: ${detail}`)
+      }
+      return setStatus(`Could not fetch the model catalog from ${provider}. Check the Base URL and API key. Details: ${detail}`)
+    }
     if (!result.value.length) return setStatus(`No valid ${outputKind === "image" ? "Image" : "Chat"} models were returned; the previous catalog is preserved.`)
     const ids = result.value.map((item) => item.id)
     setModelCatalogs((current) => ({
