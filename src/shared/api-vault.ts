@@ -38,6 +38,7 @@ export type ApiVaultProgressEvent = {
   runId: string
   phase: "thinking" | "assistant" | "tool-started" | "tool-succeeded" | "tool-failed" | "completed" | "failed"
   message: string
+  textDelta?: string
   tool?: string
   file?: string
 }
