@@ -124,6 +124,27 @@ describe("API Vault model catalogs", () => {
 describe("API Vault agent loop", () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it("does not attach an automatic deadline to a provider request", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-no-timeout-"))
+    const controller = new AbortController()
+    const fetchSignals: AbortSignal[] = []
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.signal) fetchSignals.push(init.signal)
+      return new Response(JSON.stringify({
+        id: "no-deadline", model: "test-model", choices: [{ message: { role: "assistant", content: "Completed after a long wait." } }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "prompt", conversationMode: "independent",
+      systemInstruction: "", prompt: "Continue until the provider responds.", assets: [],
+    }
+    const result = await runApiVault(install, request, () => undefined, { signal: controller.signal })
+    expect(result.text).toBe("Completed after a long wait.")
+    expect(fetchSignals).toHaveLength(1)
+    expect(fetchSignals[0]).toBe(controller.signal)
+  })
+
   it("explains a 9Router model-request timeout in plain language", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-timeout-"))
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout") }))
@@ -133,7 +154,7 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "6", assets: [],
     }
     await expect(runApiVault(install, request)).rejects.toThrow(
-      "The model request to 9Router timed out after 120 seconds. Make sure 9Router is running and the selected model is available, then try again.",
+      "The model request to 9Router was interrupted by a timeout. Make sure 9Router is running and the selected model is available, then try again.",
     )
   })
 
@@ -146,7 +167,7 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "6", assets: [],
     }
     await expect(runApiVault(install, request)).rejects.toThrow(
-      "The model request to configured provider timed out after 120 seconds. Check the Base URL and model availability, then try again.",
+      "The model request to configured provider was interrupted by a timeout. Check the Base URL and model availability, then try again.",
     )
   })
 
