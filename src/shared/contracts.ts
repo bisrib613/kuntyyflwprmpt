@@ -81,6 +81,7 @@ export type AutoPromptApi = {
   pickApiVaultAssets(): Promise<ApiResult<ApiVaultAsset[]>>
   pickApiVaultTextFile(): Promise<ApiResult<{ name: string; text: string } | null>>
   runApiVault(request: ApiVaultRequest): Promise<ApiResult<ApiVaultResponse>>
+  cancelApiVaultRun(runId: string): Promise<ApiResult<void>>
   onApiVaultProgress(listener: (event: ApiVaultProgressEvent) => void): () => void
   listApiVaultConversations(): Promise<ApiResult<ApiVaultConversation[]>>
   deleteApiVaultConversation(id: string): Promise<ApiResult<void>>
