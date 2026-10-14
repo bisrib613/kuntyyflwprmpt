@@ -233,13 +233,78 @@ export async function listApiVaultModels(provider: ApiProvider, endpoint: string
   return (await listApiVaultModelCatalog(provider, endpoint, apiKey, "text")).map((item) => item.id)
 }
 
-async function callOpenAi(request: ApiVaultRequest, model: string, messages: Message[], tools: unknown[]): Promise<OpenAiResponse> {
+type TextDeltaCallback = (delta: string) => void
+
+function contentDeltaText(content: unknown): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.flatMap((part) => {
+    if (!part || typeof part !== "object") return []
+    const item = part as Record<string, unknown>
+    return typeof item.text === "string" ? [item.text] : []
+  }).join("")
+}
+
+async function readOpenAiStream(response: Response, modelFallback: string, onTextDelta?: TextDeltaCallback): Promise<OpenAiResponse> {
+  if (!response.body) throw new Error("Provider enabled streaming but did not return a response stream.")
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let id: string | undefined
+  let model = modelFallback
+  let content = ""
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+  const consumeLine = (line: string): void => {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith("data:")) return
+    const data = trimmed.slice(5).trim()
+    if (!data || data === "[DONE]") return
+    const payload = JSON.parse(data) as {
+      id?: string; model?: string; error?: { message?: string }
+      choices?: Array<{ delta?: { content?: unknown; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }>
+    }
+    if (payload.error) throw new Error(payload.error.message || "Provider returned a streaming error.")
+    if (payload.id) id = payload.id
+    if (payload.model) model = payload.model
+    const delta = payload.choices?.[0]?.delta
+    if (!delta) return
+    const text = contentDeltaText(delta.content)
+    if (text) { content += text; onTextDelta?.(text) }
+    for (const call of delta.tool_calls || []) {
+      const index = Number.isInteger(call.index) ? call.index! : toolCalls.size
+      const previous = toolCalls.get(index) || { id: randomUUID(), name: "", arguments: "" }
+      toolCalls.set(index, {
+        id: call.id || previous.id,
+        name: previous.name + (call.function?.name || ""),
+        arguments: previous.arguments + (call.function?.arguments || ""),
+      })
+    }
+  }
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+    for (const line of lines) consumeLine(line.replace(/\r$/, ""))
+  }
+  buffer += decoder.decode()
+  if (buffer.trim()) consumeLine(buffer)
+  const calls: ToolCall[] = [...toolCalls.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => ({
+    id: call.id,
+    type: "function",
+    function: { name: call.name, arguments: call.arguments || "{}" },
+  }))
+  return { id, model, choices: [{ message: { role: "assistant", content, tool_calls: calls.length ? calls : undefined } }] }
+}
+
+async function callOpenAi(request: ApiVaultRequest, model: string, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback): Promise<OpenAiResponse> {
   const providerMessages = messages.map(({ role, content, tool_calls, tool_call_id }) => ({
     role, content,
     ...(tool_calls ? { tool_calls } : {}),
     ...(tool_call_id ? { tool_call_id } : {}),
   }))
-  const body: Record<string, unknown> = { model, messages: providerMessages, stream: false }
+  const body: Record<string, unknown> = { model, messages: providerMessages, stream: true }
   if (tools.length) { body.tools = tools; body.tool_choice = "auto" }
   if (request.provider !== "9router" && request.reasoning !== "default") body.reasoning_effort = request.reasoning
   const response = await fetch(endpointForChat(request.endpoint), {
@@ -249,9 +314,16 @@ async function callOpenAi(request: ApiVaultRequest, model: string, messages: Mes
     signal: AbortSignal.timeout(120_000),
   })
   if (!response.ok) throw await responseError(response)
+  if ((response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
+    return readOpenAiStream(response, model, onTextDelta)
+  }
+  // Compatible gateways that do not stream still work; render their real completed text once received.
   const parsed = await response.json() as OpenAiResponse
   if (parsed.error) throw new Error(parsed.error.message || "Provider returned an error.")
-  if (!parsed.choices?.[0]?.message) throw new Error("Provider response did not contain a message.")
+  const message = parsed.choices?.[0]?.message
+  if (!message) throw new Error("Provider response did not contain a message.")
+  const fallbackText = assistantText(message.content)
+  if (fallbackText) onTextDelta?.(fallbackText)
   return parsed
 }
 
@@ -289,9 +361,9 @@ function geminiParts(content: unknown): Array<Record<string, unknown>> {
   })
 }
 
-async function callGemini(request: ApiVaultRequest, messages: Message[], tools: unknown[]): Promise<OpenAiResponse> {
+async function callGemini(request: ApiVaultRequest, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback): Promise<OpenAiResponse> {
   const base = request.endpoint.trim().replace(/\/+$/, "")
-  const url = `${base}/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
+  const url = `${base}/models/${encodeURIComponent(request.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(request.apiKey)}`
   const system = messages.filter((message) => message.role === "system").map((message) => String(message.content)).join("\n\n")
   const contents = geminiContents(messages)
   const body: Record<string, unknown> = { contents }
@@ -300,10 +372,47 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   if (request.reasoning !== "default") body.generationConfig = { thinkingConfig: { thinkingLevel: request.reasoning.toUpperCase() } }
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) })
   if (!response.ok) throw await responseError(response)
-  const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
-  const parts = raw.candidates?.[0]?.content?.parts || []
-  const toolCalls: ToolCall[] = parts.filter((part) => part.functionCall).map((part) => ({ id: randomUUID(), type: "function", function: { name: part.functionCall!.name, arguments: JSON.stringify(part.functionCall!.args || {}) } }))
-  return { id: raw.responseId, model: raw.modelVersion || request.model, choices: [{ message: { role: "assistant", content: parts.map((part) => part.text || "").join(""), tool_calls: toolCalls.length ? toolCalls : undefined } }] }
+  if (!(response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
+    const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
+    const parts = raw.candidates?.[0]?.content?.parts || []
+    const text = parts.map((part) => part.text || "").join("")
+    if (text) onTextDelta?.(text)
+    const toolCalls: ToolCall[] = parts.filter((part) => part.functionCall).map((part) => ({ id: randomUUID(), type: "function", function: { name: part.functionCall!.name, arguments: JSON.stringify(part.functionCall!.args || {}) } }))
+    return { id: raw.responseId, model: raw.modelVersion || request.model, choices: [{ message: { role: "assistant", content: text, tool_calls: toolCalls.length ? toolCalls : undefined } }] }
+  }
+  if (!response.body) throw new Error("Gemini enabled streaming but returned no response stream.")
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let responseId: string | undefined
+  let modelVersion = request.model
+  let text = ""
+  const calls: ToolCall[] = []
+  const consumeLine = (line: string): void => {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith("data:")) return
+    const data = trimmed.slice(5).trim()
+    if (!data) return
+    const chunk = JSON.parse(data) as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
+    if (chunk.responseId) responseId = chunk.responseId
+    if (chunk.modelVersion) modelVersion = chunk.modelVersion
+    const parts = chunk.candidates?.[0]?.content?.parts || []
+    for (const part of parts) {
+      if (part.text) { text += part.text; onTextDelta?.(part.text) }
+      if (part.functionCall) calls.push({ id: randomUUID(), type: "function", function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) } })
+    }
+  }
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+    for (const line of lines) consumeLine(line.replace(/\r$/, ""))
+  }
+  buffer += decoder.decode()
+  if (buffer.trim()) consumeLine(buffer)
+  return { id: responseId, model: modelVersion, choices: [{ message: { role: "assistant", content: text, tool_calls: calls.length ? calls : undefined } }] }
 }
 
 async function runImageRequest(request: ApiVaultRequest, model: string): Promise<{ model: string; responseId?: string; text: string; sources: string[] }> {
@@ -512,18 +621,16 @@ export async function runApiVault(
     onProgress({ runId, phase: "thinking", message: round === 0 ? "Analyzing the request…" : "Continuing with the tool results…" })
     let response: OpenAiResponse
     try {
-      response = request.provider === "gemini" ? await callGemini(request, messages, tools) : await callOpenAi(request, model, messages, tools)
+      response = request.provider === "gemini" ? await callGemini(request, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta })) : await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }))
     } catch (error) {
       if (request.provider !== "9router" || !request.fallbackModel?.trim() || model === routedModel(request.fallbackModel, request.provider, request.reasoning)) throw error
       model = routedModel(request.fallbackModel, request.provider, request.reasoning)
       trace.push({ type: "provider", label: model, detail: `Fallback after: ${error instanceof Error ? error.message : String(error)}` })
-      response = await callOpenAi(request, model, messages, tools)
+      response = await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }))
     }
     responseId = response.id
     const message = response.choices![0].message!
     const toolCalls = message.tool_calls || []
-    const progressText = toolCalls.length ? assistantProgress(message.content) : ""
-    if (progressText) onProgress({ runId, phase: "assistant", message: progressText })
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
     if (!toolCalls.length) { finalText = assistantText(message.content); break }
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Tool execution exceeded ${MAX_TOOL_ROUNDS} rounds.`)
