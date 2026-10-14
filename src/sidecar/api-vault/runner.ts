@@ -170,9 +170,11 @@ export type ApiVaultModelCatalogItem = { id: string; owned_by?: string; outputTy
 export async function listApiVaultModelCatalog(
   provider: ApiProvider, endpoint: string, apiKey: string, outputType: "text" | "image" = "text",
 ): Promise<ApiVaultModelCatalogItem[]> {
-  const base = endpoint.trim().replace(/\\/+$/, "")
-  const suffix = provider === "gemini" ? `/models?key=${encodeURIComponent(apiKey)}`
-    : outputType === "image" && provider === "9router" ? "/models/image" : "/models"
+  const base = endpoint.trim().replace(/\/+$/, "")
+  const suffix = provider === "gemini"
+    ? (outputType === "image" ? null : `/models?key=${encodeURIComponent(apiKey)}`)
+    : outputType === "image" ? "/models/image" : "/models"
+  if (!suffix) return []
   const url = `${base}${suffix}`
   const response = await fetch(url, {
     headers: provider === "gemini" ? undefined : { authorization: `Bearer ${apiKey}` },
@@ -181,7 +183,7 @@ export async function listApiVaultModelCatalog(
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as { data?: Array<{ id?: string; owned_by?: string }>; models?: Array<{ name?: string; displayName?: string }> }
   const values = provider === "gemini"
-    ? (raw.models || []).flatMap((item) => item.name ? [{ id: item.name.replace(/^models\\//, ""), outputType }] : [])
+    ? (raw.models || []).flatMap((item) => item.name ? [{ id: item.name.replace(/^models\//, ""), outputType }] : [])
     : (raw.data || []).flatMap((item) => item.id ? [{ id: item.id, owned_by: item.owned_by, outputType }] : [])
   const distinct = new Map(values.map((item) => [item.id, item]))
   return [...distinct.values()].sort((left, right) => left.id.localeCompare(right.id)).slice(0, 500)
@@ -411,11 +413,19 @@ async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue
   const format: WebFetchFormat = ["markdown", "text", "html", "json"].includes(String(formatValue)) ? formatValue as WebFetchFormat : "markdown"
   const maxChars = typeof maxValue === "number" && Number.isFinite(maxValue) ? Math.max(1000, Math.min(100_000, Math.floor(maxValue))) : 20_000
   const checkedUrl = validateWebFetchUrl(rawUrl).href
-  if (request.provider === "9router") {
-    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars) }
-    catch { /* 9Router Web Fetch is optional; retain the shared native implementation path. */ }
+  if (request.provider !== "9router") {
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
   }
-  return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
+  try {
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
+  } catch (nativeError) {
+    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars) }
+    catch (routerError) {
+      const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError)
+      const routerMessage = routerError instanceof Error ? routerError.message : String(routerError)
+      throw new Error(`Local/native Web Fetch failed: ${nativeMessage}. 9Router Web Fetch also failed: ${routerMessage}`)
+    }
+  }
 }
 
 export async function runApiVault(
