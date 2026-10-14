@@ -6,6 +6,7 @@ import type { ApiProvider } from "../../shared/api-vault.js"
 import { routedModel } from "../../shared/api-vault.js"
 import { parseDocument } from "./documents.js"
 import { createToolContext, executeFilesystemTool, FILESYSTEM_TOOLS } from "./filesystem.js"
+import { fetchWebResource, validateWebFetchUrl, type WebFetchFormat } from "./web-fetch.js"
 
 type Message = { role: "system" | "user" | "assistant" | "tool"; content: unknown; tool_calls?: ToolCall[]; tool_call_id?: string; tool_name?: string }
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } }
@@ -25,7 +26,10 @@ function validRunId(value: string | undefined): value is string {
 function toolProgress(name: string, args: Record<string, unknown>, completed: boolean, file?: string): string {
   const requested = typeof args.path === "string" && args.path.trim() ? args.path : "the workspace"
   const target = file || requested
-  if (name === "write_text_file" || name === "write_json_file") return completed ? `Saved ${target}.` : `Writing ${requested}…`
+  if (["write_file", "write_text_file", "write_json_file"].includes(name)) return completed ? `Saved ${target}.` : `Writing ${requested}…`
+  if (name === "edit_file") return completed ? `Edited ${target}.` : `Editing ${requested}…`
+  if (name === "web_fetch") return completed ? `Fetched ${typeof args.url === "string" ? args.url : requested}.` : `Fetching ${typeof args.url === "string" ? args.url : requested}…`
+  if (name === "image_generate") return completed ? `Generated image${file ? ` · ${file}` : ""}.` : "Generating image…"
   if (name === "create_directory") return completed ? `Created ${target}.` : `Creating ${requested}…`
   if (name === "read_file") return completed ? `Read ${target}.` : `Reading ${requested}…`
   if (name === "list_directory") return completed ? `Inspected ${target}.` : `Inspecting ${requested}…`
@@ -104,22 +108,33 @@ function endpointForImages(base: string): string {
   return trimmed.endsWith("/images/generations") ? trimmed : `${trimmed}/images/generations`
 }
 
+function detectedImageMime(bytes: Buffer, declaredMime = ""): string {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg"
+  if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp"
+  if (bytes.length >= 6 && /^GIF8[79]a$/.test(bytes.toString("ascii", 0, 6))) return "image/gif"
+  if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(declaredMime.toLowerCase())) return declaredMime.toLowerCase()
+  throw new Error("Provider returned bytes that are not a supported PNG, JPEG, WebP, or GIF image.")
+}
+
 function imageExtension(mime: string): string {
   if (mime === "image/jpeg") return "jpg"
   if (mime === "image/webp") return "webp"
   if (mime === "image/gif") return "gif"
-  return "png"
+  if (mime === "image/png") return "png"
+  throw new Error(`Unsupported image media type: ${mime}`)
 }
 
 async function imageBytes(source: string): Promise<{ bytes: Buffer; mime: string }> {
   const data = source.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s)
-  if (data) return { bytes: Buffer.from(data[2], "base64"), mime: data[1] }
+  if (data) { const bytes = Buffer.from(data[2], "base64"); return { bytes, mime: detectedImageMime(bytes, data[1]) } }
   const url = new URL(source)
   if (!["http:", "https:"].includes(url.protocol)) throw new Error(`Provider returned an unsupported image URL protocol: ${url.protocol}`)
   const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
   if (!response.ok) throw await responseError(response)
   const bytes = Buffer.from(await response.arrayBuffer())
-  return { bytes, mime: response.headers.get("content-type")?.split(";")[0] || "image/png" }
+  if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("Provider image exceeds 50 MiB.")
+  return { bytes, mime: detectedImageMime(bytes, response.headers.get("content-type")?.split(";")[0] || "") }
 }
 
 async function saveImages(outputDirectory: string, runId: string, sources: string[]): Promise<string[]> {
@@ -147,19 +162,31 @@ async function responseError(response: Response): Promise<Error> {
   } catch { return new Error(body || `Provider returned HTTP ${response.status}.`) }
 }
 
-export async function listApiVaultModels(provider: ApiProvider, endpoint: string, apiKey: string): Promise<string[]> {
-  const base = endpoint.trim().replace(/\/+$/, "")
-  const url = provider === "gemini" ? `${base}/models?key=${encodeURIComponent(apiKey)}` : `${base}/models`
+
+export type ApiVaultModelCatalogItem = { id: string; owned_by?: string; outputType: "text" | "image" }
+
+export async function listApiVaultModelCatalog(
+  provider: ApiProvider, endpoint: string, apiKey: string, outputType: "text" | "image" = "text",
+): Promise<ApiVaultModelCatalogItem[]> {
+  const base = endpoint.trim().replace(/\\/+$/, "")
+  const suffix = provider === "gemini" ? `/models?key=${encodeURIComponent(apiKey)}`
+    : outputType === "image" && provider === "9router" ? "/models/image" : "/models"
+  const url = `${base}${suffix}`
   const response = await fetch(url, {
     headers: provider === "gemini" ? undefined : { authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(30_000),
   })
   if (!response.ok) throw await responseError(response)
-  const raw = await response.json() as { data?: Array<{ id?: string }>; models?: Array<{ name?: string }> }
+  const raw = await response.json() as { data?: Array<{ id?: string; owned_by?: string }>; models?: Array<{ name?: string; displayName?: string }> }
   const values = provider === "gemini"
-    ? (raw.models || []).flatMap((item) => item.name ? [item.name.replace(/^models\//, "")] : [])
-    : (raw.data || []).flatMap((item) => item.id ? [item.id] : [])
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right)).slice(0, 500)
+    ? (raw.models || []).flatMap((item) => item.name ? [{ id: item.name.replace(/^models\\//, ""), outputType }] : [])
+    : (raw.data || []).flatMap((item) => item.id ? [{ id: item.id, owned_by: item.owned_by, outputType }] : [])
+  const distinct = new Map(values.map((item) => [item.id, item]))
+  return [...distinct.values()].sort((left, right) => left.id.localeCompare(right.id)).slice(0, 500)
+}
+
+export async function listApiVaultModels(provider: ApiProvider, endpoint: string, apiKey: string): Promise<string[]> {
+  return (await listApiVaultModelCatalog(provider, endpoint, apiKey, "text")).map((item) => item.id)
 }
 
 async function callOpenAi(request: ApiVaultRequest, model: string, messages: Message[], tools: unknown[]): Promise<OpenAiResponse> {
@@ -236,7 +263,7 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
 }
 
 async function runImageRequest(request: ApiVaultRequest, model: string): Promise<{ model: string; responseId?: string; text: string; sources: string[] }> {
-  if (request.executionMode === "agent") throw new Error("Image output is available in Prompt mode; Agent mode uses Text / JSON output.")
+  if (request.outputKind === "image" && request.executionMode === "agent") throw new Error("Direct Image is a separate operation and cannot run as an Agent-mode request.")
   if (request.assets.some((asset) => asset.kind === "image")) throw new Error("The standard image-generation route does not support reference-image assets. Remove image assets or use Text / JSON with a vision model.")
   let prompt = request.systemInstruction.trim() ? `${request.systemInstruction.trim()}\n\n${request.prompt}` : request.prompt
   for (const asset of request.assets) {
@@ -245,7 +272,7 @@ async function runImageRequest(request: ApiVaultRequest, model: string): Promise
   }
   if (request.provider === "gemini") {
     const base = request.endpoint.trim().replace(/\/+$/, "")
-    const url = `${base}/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
+    const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
     const body = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { responseModalities: ["TEXT", "IMAGE"] } }
     const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) })
     if (!response.ok) throw await responseError(response)
@@ -255,10 +282,14 @@ async function runImageRequest(request: ApiVaultRequest, model: string): Promise
     if (!sources.length) throw new Error("Provider response did not contain an image.")
     return { model: raw.modelVersion || request.model, responseId: raw.responseId, text: parts.map((part) => part.text || "").join(""), sources }
   }
+  const body: Record<string, unknown> = { model, prompt, n: 1 }
+  const ratio = request.imageAspectRatio || "auto"
+  const antigravitySizes: Record<string, string> = { "1:1": "1024x1024", "9:16": "1024x1792", "16:9": "1792x1024", "2:3": "1024x1536", "3:2": "1536x1024" }
+  if (request.provider === "9router" && /antigravity/i.test(model) && ratio !== "auto" && antigravitySizes[ratio]) body.size = antigravitySizes[ratio]
   const response = await fetch(endpointForImages(request.endpoint), {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
-    body: JSON.stringify({ model, prompt, n: 1 }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   })
   if (!response.ok) throw await responseError(response)
@@ -337,6 +368,54 @@ export async function deleteApiVaultConversation(installDirectory: string, id: s
   await rm(file, { force: true })
 }
 
+
+const WEB_FETCH_TOOLS = [
+  { type: "function", function: { name: "web_fetch", description: "Fetch and extract content from one explicit public HTTP(S) URL. This is not a search engine. Returns normalized content and response metadata.", parameters: { type: "object", properties: { url: { type: "string" }, format: { type: "string", enum: ["markdown", "text", "html", "json"] }, max_chars: { type: "integer", minimum: 1000, maximum: 100000 } }, required: ["url"], additionalProperties: false } } },
+] as const
+
+const IMAGE_GENERATE_TOOLS = [
+  { type: "function", function: { name: "image_generate", description: "Generate a real image artifact when the user asks you to create an image. Use an exact compatible model from the current Image catalog. Pass an explicit user image prompt unchanged.", parameters: { type: "object", properties: { prompt: { type: "string" }, model: { type: "string" }, aspect_ratio: { type: "string", enum: ["auto", "1:1", "9:16", "16:9", "2:3", "3:2"] } }, required: ["prompt"], additionalProperties: false } } },
+] as const
+
+async function fetchThrough9Router(request: ApiVaultRequest, url: string, format: WebFetchFormat, maxChars: number): Promise<{ url: string; status: number; contentType: string; title: string; content: string; source: string }> {
+  const target = validateWebFetchUrl(url)
+  const base = request.endpoint.trim().replace(/\\/+$/, "")
+  const endpoint = base.endsWith("/web/fetch") ? base : `${base}/web/fetch`
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
+    body: JSON.stringify({ url: target.href, format, output_format: format, max_chars: maxChars, model: "jina-reader" }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) throw await responseError(response)
+  const raw = await response.json() as Record<string, unknown>
+  const nested = raw.data && typeof raw.data === "object" ? raw.data as Record<string, unknown> : raw
+  const extracted = typeof nested.content === "string" ? nested.content
+    : typeof nested.text === "string" ? nested.text
+    : typeof nested.markdown === "string" ? nested.markdown
+    : typeof nested.output === "string" ? nested.output : ""
+  if (!extracted) throw new Error("9Router Web Fetch returned no normalized page content.")
+  return {
+    url: typeof nested.url === "string" ? nested.url : target.href,
+    status: typeof nested.status === "number" ? nested.status : 200,
+    contentType: typeof nested.content_type === "string" ? nested.content_type : typeof nested.contentType === "string" ? nested.contentType : "text/markdown",
+    title: typeof nested.title === "string" ? nested.title : "",
+    content: extracted.slice(0, Math.max(1000, Math.min(100_000, maxChars))),
+    source: "9router",
+  }
+}
+
+async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue: unknown, maxValue: unknown) {
+  const format: WebFetchFormat = ["markdown", "text", "html", "json"].includes(String(formatValue)) ? formatValue as WebFetchFormat : "markdown"
+  const maxChars = typeof maxValue === "number" && Number.isFinite(maxValue) ? Math.max(1000, Math.min(100_000, Math.floor(maxValue))) : 20_000
+  const checkedUrl = validateWebFetchUrl(rawUrl).href
+  if (request.provider === "9router") {
+    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars) }
+    catch { /* 9Router Web Fetch is optional; retain the shared native implementation path. */ }
+  }
+  return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
+}
+
 export async function runApiVault(
   installDirectory: string,
   request: ApiVaultRequest,
@@ -370,7 +449,7 @@ export async function runApiVault(
   messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
-  const tools = FILESYSTEM_TOOLS.filter((tool) => context.allowWrite || !["create_directory", "write_text_file", "write_json_file"].includes(tool.function.name))
+  const tools = [...FILESYSTEM_TOOLS, ...WEB_FETCH_TOOLS, ...IMAGE_GENERATE_TOOLS].filter((tool) => context.allowWrite || !["create_directory", "write_file", "edit_file", "write_text_file", "write_json_file"].includes(tool.function.name))
   let responseId: string | undefined
   let finalText = ""
   let calls = 0
@@ -403,8 +482,30 @@ export async function runApiVault(
       trace.push({ type: "tool", label: call.function.name, detail: typeof args.path === "string" ? args.path : "" })
       onProgress({ runId, phase: "tool-started", tool: call.function.name, message: toolProgress(call.function.name, args, false) })
       try {
-        const result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args))
-        if (result.file) files.push(result.file)
+        let result: { content: string; file?: string }
+        if (call.function.name === "web_fetch") {
+          if (typeof args.url !== "string" || !args.url.trim()) throw new Error("web_fetch requires a URL.")
+          const fetched = await withToolTimeout(runWebFetch(request, args.url, args.format, args.max_chars))
+          result = { content: JSON.stringify(fetched) }
+        } else if (call.function.name === "image_generate") {
+          if (typeof args.prompt !== "string" || !args.prompt.length) throw new Error("image_generate requires a prompt.")
+          const selectedImageModel = typeof args.model === "string" && args.model.trim() ? args.model.trim() : (request.imageModel || "")
+          if (!selectedImageModel) throw new Error("No Image model is configured. Refresh or select an Image model first.")
+          const outputDirectory = join(context.workspace, "images")
+          await mkdir(outputDirectory, { recursive: true })
+          const imageRequest: ApiVaultRequest = {
+            ...request, model: selectedImageModel, imageModel: selectedImageModel,
+            imageAspectRatio: (["auto", "1:1", "9:16", "16:9", "2:3", "3:2"].includes(String(args.aspect_ratio)) ? String(args.aspect_ratio) : request.imageAspectRatio || "auto") as ApiVaultRequest["imageAspectRatio"],
+            prompt: args.prompt, systemInstruction: "", assets: [], outputKind: "image", outputDirectory, executionMode: "independent",
+          }
+          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel))
+          const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources)
+          saved.forEach((file) => files.push(file))
+          result = { content: JSON.stringify({ generated: true, model: generated.model, files: saved, note: "The explicit image prompt was sent unchanged." }), file: saved[0] }
+        } else {
+          result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args))
+        }
+        if (result.file && !files.includes(result.file)) files.push(result.file)
         messages.push({ role: "tool", tool_call_id: call.id, tool_name: call.function.name, content: result.content })
         trace.push({ type: "result", label: call.function.name, detail: result.content.slice(0, 500) })
         onProgress({ runId, phase: "tool-succeeded", tool: call.function.name, file: result.file, message: toolProgress(call.function.name, args, true, result.file) })
