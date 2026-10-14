@@ -145,7 +145,7 @@ describe("API Vault agent loop", () => {
     expect(fetchSignals[0]).toBe(controller.signal)
   })
 
-  it("explains a 9Router model-request timeout in plain language", async () => {
+  it("explains a real 9Router timeout without inventing a deadline", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-timeout-"))
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout") }))
     const request: ApiVaultRequest = {
@@ -158,7 +158,7 @@ describe("API Vault agent loop", () => {
     )
   })
 
-  it("does not blame 9Router when another provider request times out", async () => {
+  it("uses provider-appropriate guidance for an actual provider timeout", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-timeout-provider-"))
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("The operation was aborted due to timeout") }))
     const request: ApiVaultRequest = {
