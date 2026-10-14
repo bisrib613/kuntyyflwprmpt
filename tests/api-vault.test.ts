@@ -133,7 +133,7 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "6", assets: [],
     }
     await expect(runApiVault(install, request)).rejects.toThrow(
-      "The model request via 9Router timed out after 120 seconds. Make sure 9Router is running and the selected model is available, then try again.",
+      "The model request to 9Router timed out after 120 seconds. Make sure 9Router is running and the selected model is available, then try again.",
     )
   })
 
@@ -146,7 +146,7 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "6", assets: [],
     }
     await expect(runApiVault(install, request)).rejects.toThrow(
-      "The model request via The configured provider timed out after 120 seconds. Check the Base URL and model availability, then try again.",
+      "The model request to configured provider timed out after 120 seconds. Check the Base URL and model availability, then try again.",
     )
   })
 
