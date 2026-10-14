@@ -115,8 +115,7 @@ function detectedImageMime(bytes: Buffer, declaredMime = ""): string {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg"
   if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp"
   if (bytes.length >= 6 && /^GIF8[79]a$/.test(bytes.toString("ascii", 0, 6))) return "image/gif"
-  if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(declaredMime.toLowerCase())) return declaredMime.toLowerCase()
-  throw new Error("Provider returned bytes that are not a supported PNG, JPEG, WebP, or GIF image.")
+  throw new Error(`Provider bytes do not match a supported image signature (declared ${declaredMime || "unknown"}). A file extension will not be inferred from a mismatched content type.`)
 }
 
 function imageExtension(mime: string): string {
@@ -268,12 +267,8 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
 
 async function runImageRequest(request: ApiVaultRequest, model: string): Promise<{ model: string; responseId?: string; text: string; sources: string[] }> {
   if (request.outputKind === "image" && request.executionMode === "agent") throw new Error("Direct Image is a separate operation and cannot run as an Agent-mode request.")
-  if (request.assets.some((asset) => asset.kind === "image")) throw new Error("The standard image-generation route does not support reference-image assets. Remove image assets or use Text / JSON with a vision model.")
-  let prompt = request.systemInstruction.trim() ? `${request.systemInstruction.trim()}\n\n${request.prompt}` : request.prompt
-  for (const asset of request.assets) {
-    const parsed = await parseDocument(asset.path)
-    prompt += `\n\n<document name="${asset.name}">\n${parsed}\n</document>`
-  }
+  if (request.assets.length) throw new Error("Direct Image does not accept Chat attachments. Remove assets and submit the image prompt directly.")
+  const prompt = request.prompt
   if (request.provider === "gemini") {
     const base = request.endpoint.trim().replace(/\/+$/, "")
     const url = `${base}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`
@@ -437,7 +432,7 @@ export async function runApiVault(
   const runId = validRunId(request.runId) ? request.runId : randomUUID()
   const trace: AgentTraceEntry[] = []
   const files: string[] = []
-  let model = routedModel(request.outputKind === "image" ? (request.imageModel?.trim() || request.model) : request.model, request.provider, request.reasoning)
+  let model = request.outputKind === "image" ? (request.imageModel?.trim() || request.model) : routedModel(request.model, request.provider, request.reasoning)
   if (request.outputKind === "image") {
     onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
     let generated: Awaited<ReturnType<typeof runImageRequest>>
@@ -445,7 +440,7 @@ export async function runApiVault(
       generated = await runImageRequest(request, model)
     } catch (error) {
       if (request.provider !== "9router" || !request.fallbackModel?.trim() || model === routedModel(request.fallbackModel, request.provider, request.reasoning)) throw error
-      model = routedModel(request.fallbackModel, request.provider, request.reasoning)
+      model = request.fallbackModel.trim()
       generated = await runImageRequest(request, model)
     }
     const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
