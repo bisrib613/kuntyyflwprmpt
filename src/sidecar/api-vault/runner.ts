@@ -169,6 +169,65 @@ async function responseError(response: Response): Promise<Error> {
 
 export type ApiVaultModelCatalogItem = ApiModelCatalogItem
 
+function modelCatalogEndpointLabel(endpoint: string): string {
+  try {
+    const url = new URL(endpoint)
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}`
+  } catch {
+    return endpoint.split(/[?#]/, 1)[0] || "(empty endpoint)"
+  }
+}
+
+function modelCatalogFetchMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const cause = error.cause
+  if (cause && typeof cause === "object") {
+    const code = (cause as { code?: unknown }).code
+    if (typeof code === "string" && code) return `${error.message} (${code})`
+  }
+  return error.message
+}
+
+function modelCatalogHeaders(provider: ApiProvider, apiKey: string): HeadersInit | undefined {
+  if (provider === "gemini") return undefined
+  const token = apiKey.trim()
+  // Local 9Router deployments can have API-key auth disabled. Do not send an empty
+  // "Authorization: Bearer " header, which some servers interpret as invalid credentials.
+  return token ? { authorization: `Bearer ${token}` } : {}
+}
+
+async function fetchModelCatalogResource(
+  url: string,
+  init: RequestInit,
+  provider: ApiProvider,
+  endpoint: string,
+): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (error) {
+    let requestUrl: URL
+    try { requestUrl = new URL(url) } catch {
+      throw new Error(`Model fetch failed for ${provider} at ${modelCatalogEndpointLabel(endpoint)}: ${modelCatalogFetchMessage(error)}. Check the Base URL.`)
+    }
+    // On Windows, localhost may resolve to ::1 while 9Router only listens on IPv4.
+    // Retry a connection failure on IPv4 before reporting a model-fetch error.
+    if (provider === "9router" && requestUrl.protocol === "http:" && requestUrl.hostname.toLowerCase() === "localhost") {
+      const ipv4Url = new URL(requestUrl.href)
+      ipv4Url.hostname = "127.0.0.1"
+      try {
+        return await fetch(ipv4Url, init)
+      } catch (ipv4Error) {
+        throw new Error(
+          `Model fetch failed for 9Router at ${modelCatalogEndpointLabel(endpoint)}. Could not connect using localhost or 127.0.0.1 (${modelCatalogFetchMessage(ipv4Error)}). Make sure 9Router is running and that its API port is reachable.`,
+        )
+      }
+    }
+    throw new Error(
+      `Model fetch failed for ${provider} at ${modelCatalogEndpointLabel(endpoint)}: ${modelCatalogFetchMessage(error)}. Check the Base URL, network access, and API key.`,
+    )
+  }
+}
+
 export async function listApiVaultModelCatalog(
   provider: ApiProvider, endpoint: string, apiKey: string, outputType: "text" | "image" = "text",
 ): Promise<ApiVaultModelCatalogItem[]> {
@@ -178,10 +237,10 @@ export async function listApiVaultModelCatalog(
     : outputType === "image" ? "/models/image" : "/models"
   if (!suffix) return []
   const url = `${base}${suffix}`
-  const response = await fetch(url, {
-    headers: provider === "gemini" ? undefined : { authorization: `Bearer ${apiKey}` },
+  const response = await fetchModelCatalogResource(url, {
+    headers: modelCatalogHeaders(provider, apiKey),
     signal: AbortSignal.timeout(30_000),
-  })
+  }, provider, endpoint)
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as { data?: Array<{ id?: string; owned_by?: string }>; models?: Array<{ name?: string; displayName?: string }> }
   const values: ApiVaultModelCatalogItem[] = provider === "gemini"
@@ -194,12 +253,13 @@ export async function listApiVaultModelCatalog(
   // do not infer request compatibility from a model's display name.
   if (provider !== "9router") return distinct
   const enriched: ApiVaultModelCatalogItem[] = []
+  const headers = modelCatalogHeaders(provider, apiKey)
   for (let index = 0; index < distinct.length; index += 8) {
     const batch = distinct.slice(index, index + 8)
     const results = await Promise.all(batch.map(async (item) => {
       try {
         const infoUrl = `${base}/models/info?id=${encodeURIComponent(item.id)}`
-        const infoResponse = await fetch(infoUrl, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) })
+        const infoResponse = await fetchModelCatalogResource(infoUrl, { headers, signal: AbortSignal.timeout(15_000) }, provider, endpoint)
         if (!infoResponse.ok) return item
         const envelope = await infoResponse.json() as Record<string, unknown>
         const info = envelope.data && typeof envelope.data === "object" ? envelope.data as Record<string, unknown>

@@ -65,6 +65,34 @@ describe("API Vault web fetch URL boundary", () => {
 describe("API Vault model catalogs", () => {
   afterEach(() => vi.unstubAllGlobals())
 
+  it("retries local 9Router model discovery over IPv4 when localhost connection fails", async () => {
+    const urls: string[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const address = String(input)
+      urls.push(address)
+      const headers = init?.headers as Record<string, string> | undefined
+      expect(headers?.authorization).toBeUndefined()
+      if (address === "http://localhost:20128/v1/models/image" || address === "http://localhost:20128/v1/models/info?id=ag%2Fimage-model") {
+        throw new Error("fetch failed")
+      }
+      if (address === "http://127.0.0.1:20128/v1/models/image") {
+        return new Response(JSON.stringify({ data: [{ id: "ag/image-model", owned_by: "antigravity" }] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      expect(address).toBe("http://127.0.0.1:20128/v1/models/info?id=ag%2Fimage-model")
+      return new Response(JSON.stringify({ data: { capabilities: { image_generation: true } } }), { status: 200, headers: { "content-type": "application/json" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const models = await listApiVaultModelCatalog("9router", "http://localhost:20128/v1", "", "image")
+    expect(models).toMatchObject([{ id: "ag/image-model", owned_by: "antigravity", outputType: "image", capabilities: { imageGeneration: true } }])
+    expect(urls).toEqual([
+      "http://localhost:20128/v1/models/image",
+      "http://127.0.0.1:20128/v1/models/image",
+      "http://localhost:20128/v1/models/info?id=ag%2Fimage-model",
+      "http://127.0.0.1:20128/v1/models/info?id=ag%2Fimage-model",
+    ])
+  })
+
   it("loads the separate 9Router image catalog and preserves owned_by", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const address = String(url)
