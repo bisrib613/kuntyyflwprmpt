@@ -66,14 +66,14 @@ jobs:
         run: |
           $exactVersion = $env:EXACT_VERSION
           if ([string]::IsNullOrWhiteSpace($exactVersion) -and $env:GITHUB_EVENT_NAME -eq "push") {
-            if ($env:COMMIT_MESSAGE -match '\\[release\\s+(v?\\d+\\.\\d+\\.\\d+)\\]') {
+            if ($env:COMMIT_MESSAGE -match '\[release\s+(v?\d+\.\d+\.\d+)\]') {
               $exactVersion = $Matches[1] -replace '^v', ''
             }
           }
           if ([string]::IsNullOrWhiteSpace($exactVersion)) {
             npm version $env:BUMP --no-git-tag-version
           } else {
-            if ($exactVersion -notmatch '^\\d+\\.\\d+\\.\\d+$') {
+            if ($exactVersion -notmatch '^\d+\.\d+\.\d+$') {
               throw "Exact version must be strict semver x.y.z (for example 0.5.0)."
             }
             npm version $exactVersion --no-git-tag-version
