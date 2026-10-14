@@ -59,6 +59,7 @@ export function ApiVaultView() {
   const [resultView, setResultView] = useState<ResultView>("raw")
   const [runError, setRunError] = useState("")
   const [progressEvents, setProgressEvents] = useState<ApiVaultProgressEvent[]>([])
+  const [streamedText, setStreamedText] = useState("")
   const activeRunIds = useRef(new Set<string>())
   const prompts = useMemo(() => parsePromptText(prompt), [prompt])
 
@@ -104,6 +105,10 @@ export function ApiVaultView() {
 
   useEffect(() => window.autoPrompt.onApiVaultProgress((event) => {
     if (!activeRunIds.current.has(event.runId)) return
+    if (typeof event.textDelta === "string") {
+      setStreamedText((current) => current + event.textDelta)
+      return
+    }
     setProgressEvents((current) => [...current, event].slice(-200))
   }), [])
 
@@ -216,13 +221,14 @@ export function ApiVaultView() {
       const message = "Direct Image does not use Chat attachments. Remove selected assets before generating an image."
       setRunError(message); setStatus(message); return
     }
-    setRunning(true); setRunError(""); setResponse(null); setProgressEvents([]); activeRunIds.current.clear()
+    setRunning(true); setRunError(""); setResponse(null); setProgressEvents([]); setStreamedText(""); activeRunIds.current.clear()
     let activeThreadId: string | undefined = conversationMode === "independent" ? undefined : threadId || undefined
     let completedCount = 0
     try {
       for (let index = 0; index < prompts.length; index += 1) {
         const runId = crypto.randomUUID()
         activeRunIds.current.add(runId)
+        setStreamedText("")
         setStatus(`Running prompt ${index + 1} of ${prompts.length}…`)
         const result = await window.autoPrompt.runApiVault({
           runId,
@@ -295,6 +301,7 @@ export function ApiVaultView() {
         {outputKind === "text" && <><div className="vault-field-head"><div><strong>Assets</strong><span>Images stay native; documents are parsed locally</span></div><button className="text-button" disabled={running} onClick={() => void addAssets()}>＋ Select assets</button></div>
         <div className="asset-list">{assets.map((asset) => <div className="asset-chip" key={asset.id}><span className="asset-name" title={asset.path}>{asset.name}</span><span className="asset-scope">{asset.kind === "image" ? "Native image" : "Parsed document"}</span><button disabled={running} onClick={() => setAssets((current) => current.filter((item) => item.id !== asset.id))}>×</button></div>)}</div></>}
       </article>
+      {running && streamedText.length > 0 && <article className="vault-response vault-live" aria-live="polite"><div className="vault-response-head"><div><strong>Live assistant output</strong><span>Real provider text deltas</span></div></div><pre className="raw-result">{streamedText}</pre></article>}
       {progressEvents.length > 0 && <article className="vault-response vault-live" aria-live="polite">
         <div className="vault-response-head"><div><strong>Live activity</strong><span>{running ? "Working" : "Completed"} · real tool results</span></div></div>
         <div className="agent-transcript">{progressEvents.map((event, index) => <div className={`agent-event phase-${event.phase}`} key={`${event.runId}-${index}`}><i /><span>{event.message}</span></div>)}</div>
