@@ -1,4 +1,4 @@
-import type { ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings } from "./api-vault.js"
+import type { ApiModelCatalogItem, ApiOutputKind, ApiVaultAsset, ApiVaultConversation, ApiVaultProgressEvent, ApiVaultRequest, ApiVaultResponse, ApiVaultSettings } from "./api-vault.js"
 
 export type OutputKind = "image" | "video"
 export type ImageQuality = "original-1k" | "upscale-2k" | "upscale-4k"
@@ -87,6 +87,7 @@ export type AutoPromptApi = {
   loadApiVaultSettings(): Promise<ApiResult<ApiVaultSettings | null>>
   saveApiVaultSettings(settings: ApiVaultSettings): Promise<ApiResult<void>>
   listApiVaultModels(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string): Promise<ApiResult<string[]>>
+  listApiVaultModelCatalog(provider: ApiVaultRequest["provider"], endpoint: string, apiKey: string, outputType: ApiOutputKind): Promise<ApiResult<ApiModelCatalogItem[]>>
   saveApiVaultResult(directory: string, filename: string, content: string, format: "txt" | "json"): Promise<ApiResult<string>>
   getLogDirectory(): Promise<ApiResult<string>>
   openLogDirectory(): Promise<ApiResult<void>>
