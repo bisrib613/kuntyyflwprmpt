@@ -782,8 +782,10 @@ export async function runApiVault(
       onProgress({ runId, phase: "completed", message: "Image generation completed." })
       return { runId, text: generated.text, responseId: generated.responseId, model: generated.model, files: generatedFiles, trace: [{ type: "provider", label: generated.model, detail: `Saved ${generatedFiles.length} image(s)` }] }
     } catch (error) {
+      const originalMessage = error instanceof Error ? error.message : String(error)
       const readableError = readableProviderTimeout(error, request)
-      await persistRunState(imageStateDirectory, runId, "failed", control.signal?.aborted ? "Image generation was cancelled" : readableError.message, 0, imageArtifacts).catch(() => undefined)
+      const failureReason = readableError.message !== originalMessage ? readableError.message : "Image generation failed"
+      await persistRunState(imageStateDirectory, runId, "failed", control.signal?.aborted ? "Image generation was cancelled" : failureReason, 0, imageArtifacts).catch(() => undefined)
       throw readableError
     }
   }
@@ -897,8 +899,12 @@ export async function runApiVault(
     }
   }
   } catch (error) {
+    const originalMessage = error instanceof Error ? error.message : String(error)
     const readableError = readableProviderTimeout(error, request)
-    await persistRunState(dataDirectory, runId, "failed", readableError.message, iteration, artifactStates).catch(() => undefined)
+    const failureReason = readableError.message !== originalMessage
+      ? readableError.message
+      : "Run stopped before the requested work completed"
+    await persistRunState(dataDirectory, runId, "failed", control.signal?.aborted ? "Run was cancelled" : failureReason, iteration, artifactStates).catch(() => undefined)
     throw readableError
   }
   if (!finalText.trim()) {
