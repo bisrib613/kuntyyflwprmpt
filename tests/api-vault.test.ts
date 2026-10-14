@@ -3,6 +3,8 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { routedModel, type ApiVaultRequest } from "../src/shared/api-vault"
+import { validateWebFetchUrl } from "../src/sidecar/api-vault/web-fetch"
+import { listApiVaultModelCatalog } from "../src/sidecar/api-vault/runner"
 import { createToolContext, executeFilesystemTool, resolveToolPath } from "../src/sidecar/api-vault/filesystem"
 import { deleteApiVaultConversation, listApiVaultConversations, runApiVault } from "../src/sidecar/api-vault/runner"
 
@@ -15,6 +17,18 @@ describe("API Vault reasoning", () => {
 })
 
 describe("API Vault filesystem boundary", () => {
+  it("supports canonical write_file and unique targeted edit_file tools", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-canonical-"))
+    const context = createToolContext(install, "Create and save a config file", [])
+    const target = path.join(install, ".agents", "config.md")
+    const written = await executeFilesystemTool(context, "write_file", { path: "config.md", content: "before\\nvalue=1\\nafter\\n" })
+    expect(written.file).toBe(target)
+    const edited = await executeFilesystemTool(context, "edit_file", { path: "config.md", old_text: "value=1", new_text: "value=2" })
+    expect(edited.file).toBe(target)
+    expect(await readFile(target, "utf8")).toBe("before\\nvalue=2\\nafter\\n")
+    await expect(executeFilesystemTool(context, "edit_file", { path: "config.md", old_text: "missing", new_text: "x" })).rejects.toThrow(/could not find/)
+  })
+
   it("writes relative files below .agents and blocks traversal", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-"))
     const context = createToolContext(install, "Save result.json", [])
@@ -33,6 +47,39 @@ describe("API Vault filesystem boundary", () => {
     const allowed = createToolContext(install, `Save to "${external}"`, [])
     expect(await resolveToolPath(allowed, external, "write")).toBe(external)
     await expect(resolveToolPath(allowed, path.join(path.dirname(external), "invented.json"), "write")).rejects.toThrow(/blocked write/)
+  })
+})
+
+describe("API Vault web fetch URL boundary", () => {
+  it("allows public HTTP(S) URLs and rejects internal or non-HTTP destinations", () => {
+    expect(validateWebFetchUrl("https://example.com/a").hostname).toBe("example.com")
+    expect(validateWebFetchUrl("http://8.8.8.8/").protocol).toBe("http:")
+    expect(() => validateWebFetchUrl("file:///etc/passwd")).toThrow(/http/)
+    expect(() => validateWebFetchUrl("http://localhost:3000/")).toThrow(/local or internal/)
+    expect(() => validateWebFetchUrl("http://127.0.0.1/")).toThrow(/private|non-public/)
+    expect(() => validateWebFetchUrl("http://192.168.1.1/")).toThrow(/private|non-public/)
+    expect(() => validateWebFetchUrl("https://user:pass@example.com/")).toThrow(/credentials/)
+  })
+})
+
+describe("API Vault model catalogs", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("loads the separate 9Router image catalog and preserves owned_by", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toBe("http://localhost:20128/v1/models/image")
+      return new Response(JSON.stringify({ data: [{ id: "ag/image-model", owned_by: "antigravity" }] }), { status: 200, headers: { "content-type": "application/json" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(listApiVaultModelCatalog("9router", "http://localhost:20128/v1", "test-key", "image"))
+      .resolves.toEqual([{ id: "ag/image-model", owned_by: "antigravity", outputType: "image" }])
+  })
+
+  it("does not mislabel the Gemini text catalog as an Image catalog", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(listApiVaultModelCatalog("gemini", "https://generativelanguage.googleapis.com/v1beta", "key", "image")).resolves.toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
@@ -142,7 +189,7 @@ describe("API Vault agent loop", () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-install-"))
     const output = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-output-"))
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      id: "image-1", model: "image-model", data: [{ b64_json: Buffer.from("test-image").toString("base64") }],
+      id: "image-1", model: "image-model", data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/B2kAAAAASUVORK5CYII=" }],
     }), { status: 200, headers: { "content-type": "application/json" } })))
     const request: ApiVaultRequest = {
       provider: "9router", endpoint: "http://localhost:20128/v1", apiKey: "local", model: "image-model",
@@ -151,6 +198,6 @@ describe("API Vault agent loop", () => {
     }
     const result = await runApiVault(install, request)
     expect(result.files).toHaveLength(1)
-    expect(await readFile(result.files[0], "utf8")).toBe("test-image")
+    expect((await readFile(result.files[0])).subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
   })
 })
