@@ -66,7 +66,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:EXACT_VERSION)) {
             npm version $env:BUMP --no-git-tag-version
           } else {
-            if ($env:EXACT_VERSION -notmatch '^\\d+\\.\\d+\\.\\d+$') {
+            if ($env:EXACT_VERSION -notmatch '^\d+\.\d+\.\d+$') {
               throw "Exact version must be strict semver x.y.z (for example 0.5.0)."
             }
             npm version $env:EXACT_VERSION --no-git-tag-version
