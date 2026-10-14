@@ -69,6 +69,7 @@ export type ApiVaultProviderSettings = {
   apiKey: string
   model: string
   imageModel?: string
+  imageAspectRatio?: "auto" | "1:1" | "9:16" | "16:9" | "2:3" | "3:2"
   fallbackModel: string
   reasoning: ReasoningLevel
 }
