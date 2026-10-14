@@ -65,6 +65,7 @@ export function ApiVaultView() {
   const [telegramStatus, setTelegramStatus] = useState<ApiVaultTelegramStatus>({ running: false, candidates: [], approvedChats: [] })
   const [telegramBusy, setTelegramBusy] = useState(false)
   const activeRunIds = useRef(new Set<string>())
+  const activeRunId = useRef<string | null>(null)
   const prompts = useMemo(() => parsePromptText(prompt), [prompt])
 
   const updateProfile = (patch: Partial<ApiVaultProviderSettings>) => {
@@ -324,6 +325,14 @@ export function ApiVaultView() {
     setStatus("Conversation deleted.")
   }
 
+  const stopCurrentRun = async () => {
+    const runId = activeRunId.current
+    if (!runId) return
+    setStatus("Requesting cancellation…")
+    const result = await window.autoPrompt.cancelApiVaultRun(runId)
+    setStatus(result.ok ? "Stop requested." : result.error)
+  }
+
   const run = async () => {
     if (!endpoint.trim() || !selectedModel.trim() || !prompts.length) return
     if (outputKind === "image" && assets.length) {
@@ -337,6 +346,7 @@ export function ApiVaultView() {
       for (let index = 0; index < prompts.length; index += 1) {
         const runId = crypto.randomUUID()
         activeRunIds.current.add(runId)
+        activeRunId.current = runId
         setStreamedText("")
         setStatus(`Running prompt ${index + 1} of ${prompts.length}…`)
         const result = await window.autoPrompt.runApiVault({
@@ -362,7 +372,7 @@ export function ApiVaultView() {
       setResponse(null)
       setRunError(message)
       setStatus(message)
-    } finally { setRunning(false) }
+    } finally { activeRunId.current = null; setRunning(false) }
   }
 
   return <main className="vault-layout">
@@ -467,6 +477,7 @@ export function ApiVaultView() {
       <div><p className="eyebrow">Execution</p><h2>{outputKind === "image" ? "Direct Image ready" : executionMode === "agent" ? "Agent ready" : "Independent ready"}</h2><p>{prompts.length} prompt{prompts.length === 1 ? "" : "s"} · {assets.length} asset{assets.length === 1 ? "" : "s"}</p></div>
       <div className="summary-grid"><div><span>Provider</span><strong>{provider}</strong></div>{outputKind === "text" && <><div><span>Reasoning</span><strong>{reasoning}</strong></div><div><span>Mode</span><strong>{executionMode}</strong></div><div><span>Context</span><strong>{conversationMode}</strong></div></>}</div>
       <div className="message" role="status">{status}</div>
+      {running && <button className="danger-button" type="button" onClick={() => void stopCurrentRun()}>Stop current run</button>}
       <button className="run-button" disabled={running || !settingsLoaded || !endpoint.trim() || !selectedModel.trim() || !prompts.length || (outputKind === "image" && !outputDirectory)} onClick={() => void run()}><span>{running ? "Running…" : outputKind === "image" ? "Generate image" : executionMode === "agent" ? "Run agent" : "Run independent"}</span><b>→</b></button>
     </aside>
   </main>
