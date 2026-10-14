@@ -1,7 +1,7 @@
 export type ApiProvider = "gemini" | "openai" | "9router" | "custom"
 export type ApiExecutionMode = "independent" | "prompt" | "agent"
 export type ApiOutputKind = "text" | "image"
-export type ApiModelCatalogItem = { id: string; owned_by?: string; outputType: ApiOutputKind; capabilities?: { textInput?: boolean | "unknown"; imageInput?: boolean | "unknown"; imageGeneration?: boolean | "unknown"; toolCalling?: boolean | "unknown"; structuredOutput?: boolean | "unknown" } }
+export type ApiModelCatalogItem = { id: string; owned_by?: string; outputType: ApiOutputKind; capabilities?: { textInput?: boolean | "unknown"; imageInput?: boolean | "unknown"; imageGeneration?: boolean | "unknown"; toolCalling?: boolean | "unknown"; structuredOutput?: boolean | "unknown" }; supportedParameters?: string[] }
 export type ApiVaultModelCatalogs = Record<ApiProvider, { chat: ApiModelCatalogItem[]; image: ApiModelCatalogItem[]; chatRefreshedAt?: string | null; imageRefreshedAt?: string | null }>
 export type ConversationMode = "independent" | "continue" | "chain"
 export type ReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
