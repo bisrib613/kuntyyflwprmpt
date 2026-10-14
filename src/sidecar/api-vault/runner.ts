@@ -80,16 +80,32 @@ function conversationTitle(content: unknown): string {
     .slice(0, 80) || "Untitled conversation"
 }
 
-async function withToolTimeout<T>(promise: Promise<T>, timeoutMs = TOOL_TIMEOUT_MS): Promise<T> {
+async function withToolTimeout<T>(promise: Promise<T>, timeoutMs = TOOL_TIMEOUT_MS, signal?: AbortSignal): Promise<T> {
   let timer: NodeJS.Timeout | undefined
+  let abortHandler: (() => void) | undefined
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`Tool execution exceeded ${Math.floor(timeoutMs / 1000)} seconds.`)), timeoutMs) }),
+      ...(signal ? [new Promise<T>((_, reject) => {
+        abortHandler = () => reject(new Error("Run was cancelled."))
+        if (signal.aborted) abortHandler()
+        else signal.addEventListener("abort", abortHandler, { once: true })
+      })] : []),
     ])
   } finally {
     if (timer) clearTimeout(timer)
+    if (signal && abortHandler) signal.removeEventListener("abort", abortHandler)
   }
+}
+
+function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  return signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs)
+}
+
+export type ApiVaultRunControl = {
+  signal?: AbortSignal
+  approveToolCall?: (toolName: string, args: Record<string, unknown>) => Promise<boolean>
 }
 
 function mimeType(pathValue: string): string {
@@ -131,7 +147,7 @@ async function imageBytes(source: string): Promise<{ bytes: Buffer; mime: string
   if (data) { const bytes = Buffer.from(data[2], "base64"); return { bytes, mime: detectedImageMime(bytes, data[1]) } }
   const url = new URL(source)
   if (!["http:", "https:"].includes(url.protocol)) throw new Error(`Provider returned an unsupported image URL protocol: ${url.protocol}`)
-  const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
+  const response = await fetch(url, { signal: requestSignal(120_000, signal) })
   if (!response.ok) throw await responseError(response)
   const bytes = Buffer.from(await response.arrayBuffer())
   if (bytes.byteLength > 50 * 1024 * 1024) throw new Error("Provider image exceeds 50 MiB.")
@@ -298,7 +314,7 @@ async function readOpenAiStream(response: Response, modelFallback: string, onTex
   return { id, model, choices: [{ message: { role: "assistant", content, tool_calls: calls.length ? calls : undefined } }] }
 }
 
-async function callOpenAi(request: ApiVaultRequest, model: string, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback): Promise<OpenAiResponse> {
+async function callOpenAi(request: ApiVaultRequest, model: string, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback, signal?: AbortSignal): Promise<OpenAiResponse> {
   const providerMessages = messages.map(({ role, content, tool_calls, tool_call_id }) => ({
     role, content,
     ...(tool_calls ? { tool_calls } : {}),
@@ -311,7 +327,7 @@ async function callOpenAi(request: ApiVaultRequest, model: string, messages: Mes
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: requestSignal(120_000, signal),
   })
   if (!response.ok) throw await responseError(response)
   if ((response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
@@ -361,7 +377,7 @@ function geminiParts(content: unknown): Array<Record<string, unknown>> {
   })
 }
 
-async function callGemini(request: ApiVaultRequest, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback): Promise<OpenAiResponse> {
+async function callGemini(request: ApiVaultRequest, messages: Message[], tools: unknown[], onTextDelta?: TextDeltaCallback, signal?: AbortSignal): Promise<OpenAiResponse> {
   const base = request.endpoint.trim().replace(/\/+$/, "")
   const url = `${base}/models/${encodeURIComponent(request.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(request.apiKey)}`
   const system = messages.filter((message) => message.role === "system").map((message) => String(message.content)).join("\n\n")
@@ -370,7 +386,7 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   if (system) body.systemInstruction = { parts: [{ text: system }] }
   if (tools.length) body.tools = [{ functionDeclarations: tools.map((tool) => (tool as { function: unknown }).function) }]
   if (request.reasoning !== "default") body.generationConfig = { thinkingConfig: { thinkingLevel: request.reasoning.toUpperCase() } }
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) })
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: requestSignal(120_000, signal) })
   if (!response.ok) throw await responseError(response)
   if (!(response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
     const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
@@ -415,7 +431,7 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   return { id: responseId, model: modelVersion, choices: [{ message: { role: "assistant", content: text, tool_calls: calls.length ? calls : undefined } }] }
 }
 
-async function runImageRequest(request: ApiVaultRequest, model: string): Promise<{ model: string; responseId?: string; text: string; sources: string[] }> {
+async function runImageRequest(request: ApiVaultRequest, model: string, signal?: AbortSignal): Promise<{ model: string; responseId?: string; text: string; sources: string[] }> {
   if (request.outputKind === "image" && request.executionMode === "agent") throw new Error("Direct Image is a separate operation and cannot run as an Agent-mode request.")
   if (request.assets.length) throw new Error("Direct Image does not accept Chat attachments. Remove assets and submit the image prompt directly.")
   const prompt = request.prompt
@@ -439,7 +455,7 @@ async function runImageRequest(request: ApiVaultRequest, model: string): Promise
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
+    signal: requestSignal(120_000, signal),
   })
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as { id?: string; model?: string; data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>; error?: { message?: string } }
@@ -580,7 +596,7 @@ const IMAGE_GENERATE_TOOLS = [
   { type: "function", function: { name: "image_generate", description: "Generate a real image artifact when the user asks you to create an image. Use an exact compatible model from the current Image catalog. Pass an explicit user image prompt unchanged.", parameters: { type: "object", properties: { prompt: { type: "string" }, model: { type: "string" }, aspect_ratio: { type: "string", enum: ["auto", "1:1", "9:16", "16:9", "2:3", "3:2"] } }, required: ["prompt"], additionalProperties: false } } },
 ] as const
 
-async function fetchThrough9Router(request: ApiVaultRequest, url: string, format: WebFetchFormat, maxChars: number): Promise<{ url: string; status: number; contentType: string; title: string; content: string; source: string }> {
+async function fetchThrough9Router(request: ApiVaultRequest, url: string, format: WebFetchFormat, maxChars: number, signal?: AbortSignal): Promise<{ url: string; status: number; contentType: string; title: string; content: string; source: string }> {
   const target = validateWebFetchUrl(url)
   const base = request.endpoint.trim().replace(/\\/+$/, "")
   const endpoint = base.endsWith("/web/fetch") ? base : `${base}/web/fetch`
@@ -588,7 +604,7 @@ async function fetchThrough9Router(request: ApiVaultRequest, url: string, format
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${request.apiKey}` },
     body: JSON.stringify({ url: target.href, format, output_format: format, max_chars: maxChars, model: "jina-reader" }),
-    signal: AbortSignal.timeout(30_000),
+    signal: requestSignal(30_000, signal),
   })
   if (!response.ok) throw await responseError(response)
   const raw = await response.json() as Record<string, unknown>
@@ -608,17 +624,17 @@ async function fetchThrough9Router(request: ApiVaultRequest, url: string, format
   }
 }
 
-async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue: unknown, maxValue: unknown) {
+async function runWebFetch(request: ApiVaultRequest, rawUrl: string, formatValue: unknown, maxValue: unknown, signal?: AbortSignal) {
   const format: WebFetchFormat = ["markdown", "text", "html", "json"].includes(String(formatValue)) ? formatValue as WebFetchFormat : "markdown"
   const maxChars = typeof maxValue === "number" && Number.isFinite(maxValue) ? Math.max(1000, Math.min(100_000, Math.floor(maxValue))) : 20_000
   const checkedUrl = validateWebFetchUrl(rawUrl).href
   if (request.provider !== "9router") {
-    return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars, signal)), source: "local/native" }
   }
   try {
-    return { ...(await fetchWebResource(checkedUrl, format, maxChars)), source: "local/native" }
+    return { ...(await fetchWebResource(checkedUrl, format, maxChars, signal)), source: "local/native" }
   } catch (nativeError) {
-    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars) }
+    try { return await fetchThrough9Router(request, checkedUrl, format, maxChars, signal) }
     catch (routerError) {
       const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError)
       const routerMessage = routerError instanceof Error ? routerError.message : String(routerError)
@@ -631,6 +647,7 @@ export async function runApiVault(
   installDirectory: string,
   request: ApiVaultRequest,
   onProgress: (event: ApiVaultProgressEvent) => void = () => undefined,
+  control: ApiVaultRunControl = {},
 ): Promise<ApiVaultResponse> {
   if (!request.endpoint.trim() || !request.model.trim() || !request.prompt.trim()) throw new Error("Endpoint, model, and prompt are required.")
   const runId = validRunId(request.runId) ? request.runId : randomUUID()
@@ -641,11 +658,11 @@ export async function runApiVault(
     onProgress({ runId, phase: "thinking", message: "Requesting the image from the provider…" })
     let generated: Awaited<ReturnType<typeof runImageRequest>>
     try {
-      generated = await runImageRequest(request, model)
+      generated = await runImageRequest(request, model, control.signal)
     } catch (error) {
       if (request.provider !== "9router" || !request.fallbackModel?.trim() || model === routedModel(request.fallbackModel, request.provider, request.reasoning)) throw error
       model = request.fallbackModel.trim()
-      generated = await runImageRequest(request, model)
+      generated = await runImageRequest(request, model, control.signal)
     }
     const generatedFiles = await saveImages(request.outputDirectory || "", runId, generated.sources)
     generatedFiles.forEach((file) => onProgress({ runId, phase: "tool-succeeded", tool: "save_image", file, message: `Saved ${file}.` }))
@@ -681,18 +698,20 @@ export async function runApiVault(
     onProgress({ runId, phase: "thinking", message: round === 0 ? "Analyzing the request…" : "Continuing with the tool results…" })
     let response: OpenAiResponse
     try {
-      response = request.provider === "gemini" ? await callGemini(request, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta })) : await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }))
+      response = request.provider === "gemini" ? await callGemini(request, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }), control.signal) : await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }), control.signal)
     } catch (error) {
       if (request.provider !== "9router" || !request.fallbackModel?.trim() || model === routedModel(request.fallbackModel, request.provider, request.reasoning)) throw error
       model = routedModel(request.fallbackModel, request.provider, request.reasoning)
       trace.push({ type: "provider", label: model, detail: `Fallback after: ${error instanceof Error ? error.message : String(error)}` })
-      response = await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }))
+      if (control.signal?.aborted) throw new Error("Run was cancelled.")
+      response = await callOpenAi(request, model, messages, tools, (delta) => onProgress({ runId, phase: "assistant", message: delta, textDelta: delta }), control.signal)
     }
     responseId = response.id
     const message = response.choices![0].message!
     const toolCalls = message.tool_calls || []
     messages.push({ role: "assistant", content: message.content || "", tool_calls: toolCalls.length ? toolCalls : undefined })
     if (!toolCalls.length) { finalText = assistantText(message.content); break }
+    if (control.signal?.aborted) throw new Error("Run was cancelled.")
     if (round === MAX_TOOL_ROUNDS) throw new Error(`Tool execution exceeded ${MAX_TOOL_ROUNDS} rounds.`)
     for (const call of toolCalls) {
       calls += 1
@@ -705,7 +724,7 @@ export async function runApiVault(
         let result: { content: string; file?: string }
         if (call.function.name === "web_fetch") {
           if (typeof args.url !== "string" || !args.url.trim()) throw new Error("web_fetch requires a URL.")
-          const fetched = await withToolTimeout(runWebFetch(request, args.url, args.format, args.max_chars))
+          const fetched = await withToolTimeout(runWebFetch(request, args.url, args.format, args.max_chars, control.signal), 30_000, control.signal)
           result = { content: JSON.stringify(fetched) }
         } else if (call.function.name === "image_generate") {
           if (typeof args.prompt !== "string" || !args.prompt.length) throw new Error("image_generate requires a prompt.")
@@ -721,12 +740,12 @@ export async function runApiVault(
             imageAspectRatio: (["auto", "1:1", "9:16", "16:9", "2:3", "3:2"].includes(String(args.aspect_ratio)) ? String(args.aspect_ratio) : request.imageAspectRatio || "auto") as ApiVaultRequest["imageAspectRatio"],
             prompt: args.prompt, systemInstruction: "", assets: [], outputKind: "image", outputDirectory, executionMode: "independent",
           }
-          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel), 120_000)
+          const generated = await withToolTimeout(runImageRequest(imageRequest, selectedImageModel, control.signal), 120_000, control.signal)
           const saved = await saveImages(outputDirectory, `${runId}-image-${calls}`, generated.sources)
           saved.forEach((file) => files.push(file))
           result = { content: JSON.stringify({ generated: true, model: generated.model, files: saved, note: "The explicit image prompt was sent unchanged." }), file: saved[0] }
         } else {
-          result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args))
+          result = await withToolTimeout(executeFilesystemTool(context, call.function.name, args), TOOL_TIMEOUT_MS, control.signal)
         }
         if (result.file) {
           if (!files.includes(result.file)) files.push(result.file)
