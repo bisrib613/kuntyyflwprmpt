@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto"
+import { randomUUID, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { FlowpilotAccount, QueueEvent, RunSettings } from "../shared/contracts.js"
 import { QueueRunner } from "../main/automation/queue-runner.js"
@@ -24,6 +24,7 @@ let eventCursor = 0
 const events: Array<{ cursor: number; event: QueueEvent }> = []
 let apiVaultEventCursor = 0
 const apiVaultEvents: Array<{ cursor: number; event: ApiVaultProgressEvent }> = []
+const activeApiVaultRuns = new Map<string, AbortController>()
 
 const emit = (event: QueueEvent): void => {
   logAutomation("queue.event", { status: event.status, jobId: event.jobId, progress: event.progress, message: event.message })
@@ -112,17 +113,30 @@ async function request(method: string, params: unknown): Promise<unknown> {
     case "api-vault:run": {
       const settings = input.request as ApiVaultRequest | undefined
       if (!settings || typeof settings !== "object") throw new Error("API Vault request is required.")
+      const runId = typeof settings.runId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(settings.runId) ? settings.runId : randomUUID()
+      if (activeApiVaultRuns.has(runId)) throw new Error("An API Vault run with this ID is already active.")
+      const controller = new AbortController()
+      activeApiVaultRuns.set(runId, controller)
       logAutomation("api-vault.run.start", { provider: settings.provider, model: settings.model, mode: settings.executionMode })
       try {
-        const result = await runApiVault(installDirectory, settings, emitApiVault)
+        const result = await runApiVault(installDirectory, { ...settings, runId }, emitApiVault, { signal: controller.signal })
         logAutomation("api-vault.run.complete", { provider: settings.provider, model: result.model, files: result.files.length })
         return result
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        logAutomation("api-vault.run.failed", { provider: settings.provider, message })
-        if (settings.runId) emitApiVault({ runId: settings.runId, phase: "failed", message })
+        logAutomation("api-vault.run.failed", { provider: settings.provider, message: controller.signal.aborted ? "Run cancelled." : message })
+        emitApiVault({ runId, phase: "failed", message: controller.signal.aborted ? "Run stopped." : message })
         throw error
+      } finally {
+        activeApiVaultRuns.delete(runId)
       }
+    }
+    case "api-vault:run:stop": {
+      const runId = typeof input.runId === "string" ? input.runId : ""
+      const controller = activeApiVaultRuns.get(runId)
+      if (!controller) throw new Error("No active API Vault run was found for that ID.")
+      controller.abort()
+      return null
     }
     case "api-vault:telegram:validate": {
       const token = typeof input.token === "string" ? input.token : ""
