@@ -19,6 +19,19 @@ describe("fenced-code copy extraction", () => {
     expect(extractFencedCode("Inline `const x = 1` is not a fenced block.")).toBe("")
   })
 
+  it("accepts a longer closing fence and preserves code without the fences", () => {
+    expect(extractFencedCode("```js\\nconst x = 1\\n````")).toBe("const x = 1")
+  })
+
+  it("copies code from an unfinished final fence", () => {
+    expect(extractFencedCode("```html\\n<div>still generating</div>")).toBe("<div>still generating</div>")
+  })
+
+  it("normalizes CRLF while keeping distinct blocks in order", () => {
+    const response = "```js\\r\\nconst a = 1\\r\\n```\\r\\n\\r\\n~~~css\\r\\nbody {}\\r\\n~~~"
+    expect(extractFencedCode(response)).toBe("const a = 1\\n\\nbody {}")
+  })
+
   it("copies fenced HTML as literal source", () => {
     const response = "```html\n<script>doSomething()</script>\n```"
     expect(extractFencedCode(response)).toBe("<script>doSomething()</script>")
