@@ -22,9 +22,9 @@ function markerPairsForModel(model: string): MarkerPair[] {
   }
   if (/kimi|deepseek|dsml|qwen|gemini|gemma|thinking|reason/.test(normalized)) {
     pairs.push({ open: "<think>", close: ["</think>"] })
-    pairs.push({ open: "\u0060\u0060\u0060thinking\n", close: ["\n\u0060\u0060\u0060"] })
+    pairs.push({ open: "<thinking>", close: ["</thinking>"] })
     pairs.push({ open: "<|thinking|>", close: ["<|/thinking|>", "</|thinking|>"] })
-    pairs.push({ open: "\u0060\u0060\u0060thinking\\n", close: ["\\n\u0060\u0060\u0060"] })
+    pairs.push({ open: "\u0060\u0060\u0060thinking\n", close: ["\n\u0060\u0060\u0060"] })
   }
   return pairs
 }
