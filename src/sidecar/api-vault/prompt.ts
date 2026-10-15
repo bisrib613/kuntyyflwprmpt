@@ -23,11 +23,11 @@ export type HarnessPromptInput = {
 }
 
 function modeGuidance(input: HarnessPromptInput): string {
-  if (input.executionMode === "agent") {
-    return "Conversation mode: prior messages are context when a saved conversation is selected. A successful turn is persisted by the host for continuation. Do not claim that it was saved unless the runtime returns success."
-  }
   if (input.conversationMode === "chain") {
     return "Bulk Prompt mode: each section after the --- separator is evaluated as a separate run. Do not append an earlier section's result to a later section's context. If a saved conversation is selected, every section reads the same existing history as read-only context; do not write batch results back to that conversation. Without a selected conversation, each section starts with fresh context."
+  }
+  if (input.executionMode === "agent") {
+    return "Conversation mode: prior messages are context when a saved conversation is selected. A successful turn is persisted by the host for continuation. Do not claim that it was saved unless the runtime returns success."
   }
   if (input.conversationMode === "continue" && input.hasSelectedConversation) {
     return "Read-only saved context: use the selected conversation's prior messages as initial context for this unsaved run, but do not assume this run is appended to or changes that history."
