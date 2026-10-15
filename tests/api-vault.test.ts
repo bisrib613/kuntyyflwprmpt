@@ -206,6 +206,26 @@ describe("API Vault agent loop", () => {
     expect((await runApiVault(install, request)).text).toBe("Second answer")
   })
 
+  it("normalizes known leaked reasoning markup in a non-streaming provider response", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-normalize-complete-"))
+    const deltas: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      id: "qwen-cleanup", model: "Qwen3-Next",
+      choices: [{ message: { role: "assistant", content: "Visible<think>private reasoning</think> answer" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "Qwen3-Next",
+      reasoning: "default", outputKind: "text", executionMode: "prompt", conversationMode: "independent",
+      systemInstruction: "", prompt: "Give a concise answer.", assets: [],
+    }
+    const result = await runApiVault(install, request, (event) => {
+      if (typeof event.textDelta === "string") deltas.push(event.textDelta)
+    })
+    expect(result.text).toBe("Visible answer")
+    expect(deltas.join("")).toBe("Visible answer")
+    expect(deltas.join("")).not.toContain("private reasoning")
+  })
+
   it("continues, lists, and deletes a locally saved conversation", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-thread-"))
     const requestBodies: Array<{ messages?: Array<{ role?: string; content?: unknown }> }> = []
