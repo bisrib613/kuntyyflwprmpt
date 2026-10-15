@@ -36,9 +36,21 @@ describe("agent harness prompt composition", () => {
       conversationMode: "continue",
       hasSelectedConversation: true,
     })
-    expect(prompt).toContain("Read-only conversation context")
-    expect(prompt).toContain("Each Bulk Prompt section is evaluated independently")
+    expect(prompt).toContain("Read-only saved context")
+    expect(prompt).not.toContain("is persisted by the host")
     expect(prompt).not.toContain("A successful turn is persisted")
+  })
+
+  it("prioritizes Bulk Prompt semantics even if a legacy caller supplies Agent mode", () => {
+    const prompt = composeHarnessSystemInstruction({
+      ...defaults,
+      executionMode: "agent",
+      conversationMode: "chain",
+      hasSelectedConversation: true,
+    })
+    expect(prompt).toContain("Bulk Prompt mode")
+    expect(prompt).toContain("each section after the --- separator")
+    expect(prompt).not.toContain("A successful turn is persisted by the host")
   })
 
   it("describes Conversation persistence separately from Independent mode", () => {
