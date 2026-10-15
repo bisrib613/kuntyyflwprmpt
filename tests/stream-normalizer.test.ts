@@ -15,6 +15,10 @@ describe("model-targeted visible-text normalization", () => {
     expect(output).toBe("Answer visible answer")
   })
 
+  it("removes a long thinking tag without matching it as the shorter think tag", () => {
+    expect(normalizeCompleteVisibleText("Before<thinking>hidden</thinking>After", "gemini-thinking")).toBe("BeforeAfter")
+  })
+
   it("removes a split DSML tool section only for a matching model family", () => {
     const normalizer = new VisibleTextNormalizer("deepseek-v3")
     const output = ["Found it. <｜DSML｜tool_calls>", "invoke name=\"read_file\"", "</｜DSML｜tool_calls> Done."].map((chunk) => normalizer.feed(chunk)).join("") + normalizer.flush()
