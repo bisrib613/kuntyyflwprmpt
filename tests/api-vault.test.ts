@@ -183,7 +183,7 @@ describe("API Vault agent loop", () => {
     }))
     const request: ApiVaultRequest = {
       provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
-      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "independent",
+      reasoning: "default", outputKind: "text", executionMode: "independent", conversationMode: "independent",
       systemInstruction: "", prompt: "Save the answer as answer.json", assets: [],
     }
     const result = await runApiVault(install, request)
@@ -191,6 +191,8 @@ describe("API Vault agent loop", () => {
     expect(result.files).toEqual([path.join(install, ".agents", "answer.json")])
     expect(JSON.parse(await readFile(result.files[0], "utf8"))).toEqual({ answer: 42 })
     expect(requestCount).toBe(2)
+    expect(result.threadId).toBeUndefined()
+    expect(await listApiVaultConversations(install)).toEqual([])
   })
 
   it("extracts structured text content instead of rendering a blank result", async () => {
