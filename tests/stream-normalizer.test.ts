@@ -25,6 +25,12 @@ describe("model-targeted visible-text normalization", () => {
     expect(output).toBe("Found it.  Done.")
   })
 
+  it("removes a Kimi tool-call section without deleting adjacent prose", () => {
+    const normalizer = new VisibleTextNormalizer("moonshot/kimi-k2")
+    const output = ["Before ", "<|tool_calls_section_", "begin|>tool protocol", "<|tool_calls_section_end|>", " after."].map((chunk) => normalizer.feed(chunk)).join("") + normalizer.flush()
+    expect(output).toBe("Before  after.")
+  })
+
   it("preserves ordinary XML/HTML examples and unknown-model text", () => {
     const text = "Literal <tag>value</tag>; fenced sample: ```html\n<script>example()</script>\n```."
     expect(normalizeCompleteVisibleText(text, "gpt-5")).toBe(text)
