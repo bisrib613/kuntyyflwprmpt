@@ -270,6 +270,65 @@ describe("API Vault agent loop", () => {
     expect(await listApiVaultConversations(install)).toMatchObject([{ id: first.threadId, turnCount: 1 }])
   })
 
+  it("runs Bulk Prompt against the same saved conversation snapshot without chaining or persisting results", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-bulk-context-"))
+    const requestBodies: Array<{ tools?: unknown[]; messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown }> }> = []
+    let requestCount = 0
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)))
+      requestCount += 1
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({
+          id: "seed-agent", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved seed context." } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (requestCount === 2) {
+        return new Response(JSON.stringify({
+          id: "bulk-tool", model: "test-model", choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "bulk-call", type: "function", function: { name: "write_json_file", arguments: JSON.stringify({ path: "bulk-result.json", content: { batch: 1 } }) } }] } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (requestCount === 3) {
+        return new Response(JSON.stringify({
+          id: "bulk-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved bulk-result.json." } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({
+        id: `bulk-independent-${requestCount}`, model: "test-model", choices: [{ message: { role: "assistant", content: "Second bulk section completed from the saved snapshot." } }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+    const base: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "continue",
+      systemInstruction: "", prompt: "Establish the conversation context.", assets: [],
+    }
+    const seed = await runApiVault(install, base)
+    expect(seed.threadId).toBeTruthy()
+
+    const firstBulk = await runApiVault(install, {
+      ...base, executionMode: "prompt", conversationMode: "chain", threadId: seed.threadId,
+      prompt: "Bulk section one: save bulk-result.json",
+    })
+    const secondBulk = await runApiVault(install, {
+      ...base, executionMode: "prompt", conversationMode: "chain", threadId: seed.threadId,
+      prompt: "Bulk section two: use the original context",
+    })
+
+    expect(firstBulk.text).toBe("Saved bulk-result.json.")
+    expect(secondBulk.text).toBe("Second bulk section completed from the saved snapshot.")
+    expect(firstBulk.threadId).toBe(seed.threadId)
+    expect(secondBulk.threadId).toBe(seed.threadId)
+    const secondBulkMessages = requestBodies[3].messages || []
+    const secondBulkContent = JSON.stringify(secondBulkMessages)
+    expect(secondBulkMessages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"])
+    expect(secondBulkContent).toContain("Establish the conversation context.")
+    expect(secondBulkContent).toContain("Saved seed context.")
+    expect(secondBulkContent).toContain("Bulk section two: use the original context")
+    expect(secondBulkContent).not.toContain("Bulk section one")
+    expect(secondBulkContent).not.toContain("bulk-result.json")
+    expect(secondBulkContent).not.toContain("Saved bulk-result.json.")
+    expect(await listApiVaultConversations(install)).toMatchObject([{ id: seed.threadId, turnCount: 1 }])
+  })
+
   it("saves an image-generation response in the selected result folder", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-install-"))
     const output = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-image-output-"))
