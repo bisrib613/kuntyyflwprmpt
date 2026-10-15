@@ -5,7 +5,7 @@ export function extractFencedCode(text: string): string {
 
   for (const line of lines) {
     if (!activeFence) {
-      const opening = /^[ \t]{0,3}(\`{3,}|~{3,})(.*)$/.exec(line)
+      const opening = /^[ \t]{0,3}((?:\u0060){3,}|~{3,})(.*)$/.exec(line)
       if (!opening) continue
       const marker = opening[1]
       const info = opening[2]
