@@ -14,7 +14,7 @@ describe("context mode mapping", () => {
 
   it("maps Bulk Prompt to an unsaved run that may load selected history", () => {
     expect(executionModeForContextMode("chain")).toBe("independent")
-    expect(requestConversationMode("chain")).toBe("continue")
+    expect(requestConversationMode("chain")).toBe("chain")
   })
 
   it("preserves old persisted Conversation mode", () => {
