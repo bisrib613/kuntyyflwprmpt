@@ -183,7 +183,7 @@ describe("API Vault agent loop", () => {
     }))
     const request: ApiVaultRequest = {
       provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
-      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "independent",
+      reasoning: "default", outputKind: "text", executionMode: "independent", conversationMode: "independent",
       systemInstruction: "", prompt: "Save the answer as answer.json", assets: [],
     }
     const result = await runApiVault(install, request)
@@ -191,6 +191,8 @@ describe("API Vault agent loop", () => {
     expect(result.files).toEqual([path.join(install, ".agents", "answer.json")])
     expect(JSON.parse(await readFile(result.files[0], "utf8"))).toEqual({ answer: 42 })
     expect(requestCount).toBe(2)
+    expect(result.threadId).toBeUndefined()
+    expect(await listApiVaultConversations(install)).toEqual([])
   })
 
   it("extracts structured text content instead of rendering a blank result", async () => {
@@ -204,6 +206,60 @@ describe("API Vault agent loop", () => {
       systemInstruction: "", prompt: "Second prompt", assets: [],
     }
     expect((await runApiVault(install, request)).text).toBe("Second answer")
+  })
+
+  it("normalizes known leaked reasoning markup in a non-streaming provider response", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-normalize-complete-"))
+    const deltas: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      id: "qwen-cleanup", model: "Qwen3-Next",
+      choices: [{ message: { role: "assistant", content: "Visible<think>private reasoning</think> answer" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "Qwen3-Next",
+      reasoning: "default", outputKind: "text", executionMode: "prompt", conversationMode: "independent",
+      systemInstruction: "", prompt: "Give a concise answer.", assets: [],
+    }
+    const result = await runApiVault(install, request, (event) => {
+      if (typeof event.textDelta === "string") deltas.push(event.textDelta)
+    })
+    expect(result.text).toBe("Visible answer")
+    expect(deltas.join("")).toBe("Visible answer")
+    expect(deltas.join("")).not.toContain("private reasoning")
+  })
+
+  it("normalizes split reasoning markers across the OpenAI-compatible SSE transport", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-normalize-sse-"))
+    const deltas: string[] = []
+    const frames = [
+      { id: "sse-clean", model: "Qwen3-Next", choices: [{ delta: { content: "Visible<thi" } }] },
+      { choices: [{ delta: { content: "nk>private</thi" } }] },
+      { choices: [{ delta: { content: "nk> answer" } }] },
+    ].map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n"
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < frames.length; index += 13) {
+          controller.enqueue(encoder.encode(frames.slice(index, index + 13)))
+        }
+        controller.close()
+      },
+    })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "Qwen3-Next",
+      reasoning: "default", outputKind: "text", executionMode: "independent", conversationMode: "independent",
+      systemInstruction: "", prompt: "Give a concise answer.", assets: [],
+    }
+    const result = await runApiVault(install, request, (event) => {
+      if (typeof event.textDelta === "string") deltas.push(event.textDelta)
+    })
+    expect(result.text).toBe("Visible answer")
+    expect(deltas.join("")).toBe("Visible answer")
+    expect(deltas.join("")).not.toContain("private")
   })
 
   it("continues, lists, and deletes a locally saved conversation", async () => {
@@ -225,7 +281,7 @@ describe("API Vault agent loop", () => {
     const first = await runApiVault(install, base)
     const second = await runApiVault(install, { ...base, threadId: first.threadId, prompt: "Second prompt" })
     expect(second.text).toBe("Second answer")
-    expect(requestBodies[1].messages?.map((message) => message.role)).toEqual(["system", "system", "user", "assistant", "user"])
+    expect(requestBodies[1].messages?.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"])
     const conversations = await listApiVaultConversations(install)
     expect(conversations).toMatchObject([{ id: first.threadId, title: "First prompt", turnCount: 2 }])
     await deleteApiVaultConversation(install, first.threadId!)
@@ -268,6 +324,65 @@ describe("API Vault agent loop", () => {
     expect(requestBodies[2].messages?.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user"])
     expect(requestBodies[2].messages?.some((message) => message.role === "tool" || message.tool_calls)).toBe(true)
     expect(await listApiVaultConversations(install)).toMatchObject([{ id: first.threadId, turnCount: 1 }])
+  })
+
+  it("runs Bulk Prompt against the same saved conversation snapshot without chaining or persisting results", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-bulk-context-"))
+    const requestBodies: Array<{ tools?: unknown[]; messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown }> }> = []
+    let requestCount = 0
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)))
+      requestCount += 1
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({
+          id: "seed-agent", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved seed context." } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (requestCount === 2) {
+        return new Response(JSON.stringify({
+          id: "bulk-tool", model: "test-model", choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "bulk-call", type: "function", function: { name: "write_json_file", arguments: JSON.stringify({ path: "bulk-result.json", content: { batch: 1 } }) } }] } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (requestCount === 3) {
+        return new Response(JSON.stringify({
+          id: "bulk-final", model: "test-model", choices: [{ message: { role: "assistant", content: "Saved bulk-result.json." } }],
+        }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({
+        id: `bulk-independent-${requestCount}`, model: "test-model", choices: [{ message: { role: "assistant", content: "Second bulk section completed from the saved snapshot." } }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+    const base: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "test-model",
+      reasoning: "default", outputKind: "text", executionMode: "agent", conversationMode: "continue",
+      systemInstruction: "", prompt: "Establish the conversation context.", assets: [],
+    }
+    const seed = await runApiVault(install, base)
+    expect(seed.threadId).toBeTruthy()
+
+    const firstBulk = await runApiVault(install, {
+      ...base, executionMode: "prompt", conversationMode: "chain", threadId: seed.threadId,
+      prompt: "Bulk section one: save bulk-result.json",
+    })
+    const secondBulk = await runApiVault(install, {
+      ...base, executionMode: "prompt", conversationMode: "chain", threadId: seed.threadId,
+      prompt: "Bulk section two: use the original context",
+    })
+
+    expect(firstBulk.text).toBe("Saved bulk-result.json.")
+    expect(secondBulk.text).toBe("Second bulk section completed from the saved snapshot.")
+    expect(firstBulk.threadId).toBe(seed.threadId)
+    expect(secondBulk.threadId).toBe(seed.threadId)
+    const secondBulkMessages = requestBodies[3].messages || []
+    const secondBulkContent = JSON.stringify(secondBulkMessages)
+    expect(secondBulkMessages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"])
+    expect(secondBulkContent).toContain("Establish the conversation context.")
+    expect(secondBulkContent).toContain("Saved seed context.")
+    expect(secondBulkContent).toContain("Bulk section two: use the original context")
+    expect(secondBulkContent).not.toContain("Bulk section one")
+    expect(secondBulkContent).not.toContain("bulk-result.json")
+    expect(secondBulkContent).not.toContain("Saved bulk-result.json.")
+    expect(await listApiVaultConversations(install)).toMatchObject([{ id: seed.threadId, turnCount: 1 }])
   })
 
   it("saves an image-generation response in the selected result folder", async () => {
