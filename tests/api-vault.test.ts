@@ -235,7 +235,7 @@ describe("API Vault agent loop", () => {
       { id: "sse-clean", model: "Qwen3-Next", choices: [{ delta: { content: "Visible<thi" } }] },
       { choices: [{ delta: { content: "nk>private</thi" } }] },
       { choices: [{ delta: { content: "nk> answer" } }] },
-    ].map((frame) => `data: ${JSON.stringify(frame)}\\n\\n`).join("") + "data: [DONE]\\n\\n"
+    ].map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n"
     const encoder = new TextEncoder()
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
