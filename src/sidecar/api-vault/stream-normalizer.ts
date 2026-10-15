@@ -94,13 +94,6 @@ export class VisibleTextNormalizer {
         index += opened.open.length
         continue
       }
-      const strayClose = this.pairs.flatMap((pair) => pair.close).sort((a, b) => b.length - a.length)
-        .find((marker) => input.startsWith(marker, index))
-      if (strayClose) {
-        index += strayClose.length
-        continue
-      }
-
       const remainder = input.slice(index)
       if (!final && allMarkers.some((marker) => remainder.length < marker.length && marker.startsWith(remainder))) {
         this.buffer = remainder
