@@ -7,6 +7,8 @@ import { routedModel } from "../../shared/api-vault.js"
 import { parseDocument } from "./documents.js"
 import { createToolContext, executeFilesystemTool, FILESYSTEM_TOOLS } from "./filesystem.js"
 import { fetchWebResource, validateWebFetchUrl, type WebFetchFormat } from "./web-fetch.js"
+import { composeHarnessSystemInstruction } from "./prompt.js"
+import { normalizeCompleteVisibleText, VisibleTextNormalizer } from "./stream-normalizer.js"
 
 type Message = { role: "system" | "user" | "assistant" | "tool"; content: unknown; tool_calls?: ToolCall[]; tool_call_id?: string; tool_name?: string }
 type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } }
@@ -15,10 +17,6 @@ type OpenAiResponse = { id?: string; model?: string; choices?: Array<{ message?:
 const MAX_TOOL_ROUNDS = 8
 const MAX_TOOL_CALLS = 16
 const MAX_CONTEXT_CHARS = 300_000
-const RUNTIME_INSTRUCTION = `You are the general-purpose primary agent inside Kuntyy AutoPrompt. This runtime instruction is a durable behavior contract, not a specialist role.
-Understand and complete the user's actual goal. Use the registered tools when they materially help complete or verify the task. Continue across multiple tool cycles when needed; do not abbreviate a substantial deliverable merely to fit one response. Inspect relevant existing files and context before destructive or conflicting changes.
-Let the user's instructions determine deliverable count, filenames, formats, separators, and directory structure. Preserve explicit prompt text, model names, paths, image prompts, aspect ratios, and parameters; infer only missing values. Treat tool results as observations and recover from truthful errors where possible. Never claim that a file, image, fetch, or operation succeeded without a successful tool result.
-When files are requested, keep substantial content in real artifacts and return a concise report grounded in actual tool results. Direct responses are also valid; do not create unnecessary plans or files. Use dedicated filesystem tools rather than shell or PowerShell. Do not invent domain-specific workflows, parse user prose as runtime control, synthesize progress or completion claims, or expose credentials, hidden reasoning, raw protocol payloads, or internal provider traces.`
 
 function validRunId(value: string | undefined): value is string {
   return Boolean(value && /^[a-zA-Z0-9_-]{1,128}$/.test(value))
@@ -334,6 +332,7 @@ async function readOpenAiStream(response: Response, modelFallback: string, onTex
   let id: string | undefined
   let model = modelFallback
   let content = ""
+  const normalizer = new VisibleTextNormalizer(modelFallback)
   const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
   const consumeLine = (line: string): void => {
     const trimmed = line.trim()
@@ -350,7 +349,10 @@ async function readOpenAiStream(response: Response, modelFallback: string, onTex
     const delta = payload.choices?.[0]?.delta
     if (!delta) return
     const text = contentDeltaText(delta.content)
-    if (text) { content += text; onTextDelta?.(text) }
+    if (text) {
+      const visible = normalizer.feed(text)
+      if (visible) { content += visible; onTextDelta?.(visible) }
+    }
     for (const call of delta.tool_calls || []) {
       const index = Number.isInteger(call.index) ? call.index! : toolCalls.size
       const previous = toolCalls.get(index) || { id: randomUUID(), name: "", arguments: "" }
@@ -371,6 +373,8 @@ async function readOpenAiStream(response: Response, modelFallback: string, onTex
   }
   buffer += decoder.decode()
   if (buffer.trim()) consumeLine(buffer)
+  const tail = normalizer.flush()
+  if (tail) { content += tail; onTextDelta?.(tail) }
   const calls: ToolCall[] = [...toolCalls.entries()].sort((a, b) => a[0] - b[0]).map(([, call]) => ({
     id: call.id,
     type: "function",
@@ -403,9 +407,14 @@ async function callOpenAi(request: ApiVaultRequest, model: string, messages: Mes
   if (parsed.error) throw new Error(parsed.error.message || "Provider returned an error.")
   const message = parsed.choices?.[0]?.message
   if (!message) throw new Error("Provider response did not contain a message.")
-  const fallbackText = assistantText(message.content)
+  const fallbackText = normalizeCompleteVisibleText(assistantText(message.content), model)
   if (fallbackText) onTextDelta?.(fallbackText)
-  return parsed
+  return {
+    ...parsed,
+    choices: parsed.choices?.map((choice, index) => index === 0 && choice.message
+      ? { ...choice, message: { ...choice.message, content: fallbackText } }
+      : choice),
+  }
 }
 
 function geminiContents(messages: Message[]): Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> {
@@ -456,7 +465,8 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   if (!(response.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
     const raw = await response.json() as { modelVersion?: string; responseId?: string; candidates?: Array<{ content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> } }> }
     const parts = raw.candidates?.[0]?.content?.parts || []
-    const text = parts.map((part) => part.text || "").join("")
+    const rawText = parts.map((part) => part.text || "").join("")
+    const text = normalizeCompleteVisibleText(rawText, request.model)
     if (text) onTextDelta?.(text)
     const toolCalls: ToolCall[] = parts.filter((part) => part.functionCall).map((part) => ({ id: randomUUID(), type: "function", function: { name: part.functionCall!.name, arguments: JSON.stringify(part.functionCall!.args || {}) } }))
     return { id: raw.responseId, model: raw.modelVersion || request.model, choices: [{ message: { role: "assistant", content: text, tool_calls: toolCalls.length ? toolCalls : undefined } }] }
@@ -468,6 +478,7 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   let responseId: string | undefined
   let modelVersion = request.model
   let text = ""
+  const normalizer = new VisibleTextNormalizer(request.model)
   const calls: ToolCall[] = []
   const consumeLine = (line: string): void => {
     const trimmed = line.trim()
@@ -479,7 +490,10 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
     if (chunk.modelVersion) modelVersion = chunk.modelVersion
     const parts = chunk.candidates?.[0]?.content?.parts || []
     for (const part of parts) {
-      if (part.text) { text += part.text; onTextDelta?.(part.text) }
+      if (part.text) {
+        const visible = normalizer.feed(part.text)
+        if (visible) { text += visible; onTextDelta?.(visible) }
+      }
       if (part.functionCall) calls.push({ id: randomUUID(), type: "function", function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) } })
     }
   }
@@ -493,6 +507,8 @@ async function callGemini(request: ApiVaultRequest, messages: Message[], tools: 
   }
   buffer += decoder.decode()
   if (buffer.trim()) consumeLine(buffer)
+  const tail = normalizer.flush()
+  if (tail) { text += tail; onTextDelta?.(tail) }
   return { id: responseId, model: modelVersion, choices: [{ message: { role: "assistant", content: text, tool_calls: calls.length ? calls : undefined } }] }
 }
 
@@ -635,8 +651,9 @@ function validThreadId(value: string | undefined): value is string {
 }
 
 async function loadThread(dataDirectory: string, request: ApiVaultRequest): Promise<{ id: string; messages: Message[] }> {
-  const id = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : randomUUID()
-  if (request.conversationMode !== "continue") return { id, messages: [] }
+  const canLoadSavedContext = request.conversationMode !== "independent" && validThreadId(request.threadId)
+  const id = canLoadSavedContext ? request.threadId! : randomUUID()
+  if (!canLoadSavedContext) return { id, messages: [] }
   const pathValue = join(dataDirectory, "conversations", `${id}.json`)
   try {
     const parsed = JSON.parse(await readFile(pathValue, "utf8")) as { messages?: Message[] }
@@ -788,10 +805,6 @@ export async function runApiVault(
   let iteration = 0
   await persistRunState(dataDirectory, runId, "running", "Preparing the primary-agent run", iteration, artifactStates)
   const thread = await loadThread(dataDirectory, request)
-  const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
-  if (request.systemInstruction.trim()) messages.unshift({ role: "system", content: request.systemInstruction.trim() })
-  messages.unshift({ role: "system", content: RUNTIME_INSTRUCTION })
-  messages.push({ role: "user", content: await buildUserContent(request) })
   const context = createToolContext(installDirectory, request.prompt, request.assets.map((asset) => asset.path))
   await mkdir(context.workspace, { recursive: true })
   const imageModelIds = [...new Set([request.imageModel, ...(request.imageModelCatalog || []).map((item: ApiModelCatalogItem) => item.id)].filter((value): value is string => Boolean(value?.trim())))]
@@ -800,6 +813,16 @@ export async function runApiVault(
     function: { ...tool.function, parameters: { ...tool.function.parameters, properties: { ...tool.function.parameters.properties, model: { type: "string", enum: imageModelIds } } } },
   })) : []
   const tools = [...FILESYSTEM_TOOLS, ...WEB_FETCH_TOOLS, ...imageTools].filter((tool) => context.allowWrite || !["create_directory", "write_file", "edit_file", "write_text_file", "write_json_file"].includes(tool.function.name))
+  const systemInstruction = composeHarnessSystemInstruction({
+    taskInstructions: request.systemInstruction,
+    availableToolNames: tools.map((tool) => tool.function.name),
+    executionMode: request.executionMode,
+    conversationMode: request.conversationMode,
+    hasSelectedConversation: request.conversationMode !== "independent" && validThreadId(request.threadId),
+  })
+  const messages: Message[] = thread.messages.filter((message) => message.role !== "system")
+  messages.unshift({ role: "system", content: systemInstruction })
+  messages.push({ role: "user", content: await buildUserContent(request) })
   let responseId: string | undefined
   let finalText = ""
   let calls = 0
@@ -904,9 +927,9 @@ export async function runApiVault(
     await persistRunState(dataDirectory, runId, "failed", "Provider returned an empty final response", iteration, artifactStates).catch(() => undefined)
     throw new Error("Provider returned an empty final response.")
   }
-  const persistsConversation = request.executionMode === "agent"
+  const persistsConversation = request.executionMode === "agent" && request.conversationMode !== "chain"
   if (persistsConversation) await saveThread(dataDirectory, thread.id, messages)
-  const selectedThreadId = request.conversationMode === "continue" && validThreadId(request.threadId) ? request.threadId : undefined
+  const selectedThreadId = request.conversationMode !== "independent" && validThreadId(request.threadId) ? request.threadId : undefined
   await persistRunState(dataDirectory, runId, "completed", "Requested task completed", iteration, artifactStates)
   onProgress({ runId, phase: "completed", message: files.length ? `Completed with ${files.length} saved file${files.length === 1 ? "" : "s"}.` : "Run completed." })
   return { runId, text: finalText, responseId, model, threadId: persistsConversation ? thread.id : selectedThreadId, files, trace }
