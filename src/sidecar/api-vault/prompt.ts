@@ -26,15 +26,17 @@ function modeGuidance(input: HarnessPromptInput): string {
   if (input.executionMode === "agent") {
     return "Conversation mode: prior messages are context when a saved conversation is selected. A successful turn is persisted by the host for continuation. Do not claim that it was saved unless the runtime returns success."
   }
-  if (input.conversationMode !== "independent" && input.hasSelectedConversation) {
-    return "Read-only conversation context: use the selected saved conversation's prior messages as initial context, but do not assume this run or another Bulk Prompt result is appended to that history. Each Bulk Prompt section is evaluated independently against the selected conversation's existing history."
+  if (input.conversationMode === "chain") {
+    return "Bulk Prompt mode: each section after the --- separator is evaluated as a separate run. Do not append an earlier section's result to a later section's context. If a saved conversation is selected, every section reads the same existing history as read-only context; do not write batch results back to that conversation. Without a selected conversation, each section starts with fresh context."
   }
-  if (input.conversationMode !== "independent") {
-    return "Unsaved context mode: no saved conversation was selected, so treat this run as fresh context. Do not invent prior messages or claim that this run was persisted."
+  if (input.conversationMode === "continue" && input.hasSelectedConversation) {
+    return "Read-only saved context: use the selected conversation's prior messages as initial context for this unsaved run, but do not assume this run is appended to or changes that history."
+  }
+  if (input.conversationMode === "continue") {
+    return "Conversation context was requested without a valid saved conversation, so this run starts with fresh context. Do not invent prior messages or claim that this run was persisted."
   }
   return "Independent mode: no saved conversation history is loaded or persisted. This does not limit tool use within this run; use multiple tool calls when the task requires them."
 }
-
 export function composeHarnessSystemInstruction(input: HarnessPromptInput): string {
   const availableTools = [...new Set(input.availableToolNames)].filter(Boolean)
   const sections = [
