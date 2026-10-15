@@ -24,7 +24,7 @@ function markerPairsForModel(model: string): MarkerPair[] {
     pairs.push({ open: "<think>", close: ["</think>"] })
     pairs.push({ open: "<thinking>", close: ["</thinking>"] })
     pairs.push({ open: "<|thinking|>", close: ["<|/thinking|>", "</|thinking|>"] })
-    pairs.push({ open: "&#96;&#96;&#96;thinking\n", close: ["\n&#96;&#96;&#96;"] })
+    pairs.push({ open: "\u0060\u0060\u0060thinking\\n", close: ["\\n\u0060\u0060\u0060"] })
   }
   return pairs
 }
@@ -40,7 +40,7 @@ export class VisibleTextNormalizer {
   private suppressedBy: string[] | null = null
 
   constructor(model: string) {
-    this.pairs = markerPairsForModel(model)
+    this.pairs = markerPairsForModel(model).sort((left, right) => right.open.length - left.open.length)
   }
 
   feed(chunk: string): string {
