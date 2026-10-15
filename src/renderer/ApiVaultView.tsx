@@ -4,6 +4,8 @@ import remarkGfm from "remark-gfm"
 import type { ApiModelCatalogItem, ApiOutputKind, ApiProvider, ApiVaultAsset, ApiVaultConversation, ApiVaultModelCatalogs, ApiVaultProgressEvent, ApiVaultProviderSettings, ApiVaultResponse, ApiVaultSettings, ApiVaultTelegramStatus, ConversationMode, ReasoningLevel } from "../shared/api-vault"
 import { REASONING_LEVELS } from "../shared/api-vault"
 import { parsePromptText } from "../shared/prompt-file"
+import { extractFencedCode } from "../shared/response-copy"
+import { executionModeForContextMode, restoreContextMode } from "../shared/context-mode"
 
 const PROVIDERS: Array<{ value: ApiProvider; label: string; endpoint: string; model: string }> = [
   { value: "gemini", label: "Gemini", endpoint: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash" },
@@ -123,7 +125,9 @@ export function ApiVaultView() {
           setModelOptions((current) => Object.fromEntries(PROVIDERS.map((item) => [item.value, settings.value!.modelCatalogs?.[item.value]?.chat.map((model) => model.id) || current[item.value]])) as Record<ApiProvider, string[]>)
           setImageModelOptions((current) => Object.fromEntries(PROVIDERS.map((item) => [item.value, settings.value!.modelCatalogs?.[item.value]?.image.map((model) => model.id) || current[item.value]])) as Record<ApiProvider, string[]>)
         }
-        if (settings.value.executionMode) setExecutionMode(settings.value.executionMode === "prompt" ? "independent" : settings.value.executionMode)
+        const restoredContextMode = restoreContextMode(settings.value.executionMode, settings.value.conversationMode)
+        setConversationMode(restoredContextMode)
+        setExecutionMode(executionModeForContextMode(restoredContextMode))
         if (settings.value.telegram) {
           setTelegramSettings(settings.value.telegram)
           setTelegramTokenInput(settings.value.telegram.botToken || "")
@@ -133,7 +137,6 @@ export function ApiVaultView() {
             else setTelegramStatus((current) => ({ ...current, running: false, lastError: remote.error }))
           }
         }
-        if (settings.value.conversationMode) setConversationMode(settings.value.conversationMode)
         const savedModel = settings.value.providers[settings.value.activeProvider]?.model
         if (savedModel && !settings.value.modelCatalogs?.[settings.value.activeProvider]?.chat.length) setModelOptions((current) => ({ ...current, [settings.value!.activeProvider]: [savedModel] }))
       } else if (!settings.ok) setStatus(settings.error)
@@ -371,6 +374,16 @@ export function ApiVaultView() {
     setStatus("Conversation deleted.")
   }
 
+  const copyResultText = async (text: string, description: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setStatus(`${description} copied to clipboard.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(`Could not copy ${description.toLowerCase()}: ${message}`)
+    }
+  }
+
   const stopCurrentRun = async () => {
     const runId = activeRunId.current
     if (!runId) return
@@ -399,7 +412,7 @@ export function ApiVaultView() {
           runId,
           provider, endpoint, apiKey, model: selectedModel, imageModel: imageModel || undefined, imageModelCatalog: modelCatalogs[provider].image, imageAspectRatio, fallbackModel: provider === "9router" ? fallbackModel : undefined,
           reasoning, outputKind, outputDirectory: outputKind === "image" ? outputDirectory : undefined,
-          executionMode, conversationMode: conversationMode === "independent" ? "independent" : "continue",
+          executionMode, conversationMode,
           threadId: activeThreadId, systemInstruction: outputKind === "image" ? "" : systemInstruction, prompt: prompts[index], assets: outputKind === "image" ? [] : assets,
         })
         if (!result.ok) throw new Error(result.error)
@@ -443,15 +456,16 @@ export function ApiVaultView() {
         <label>Filename <span className="optional">Optional</span><input value={resultFilename} disabled={running} onChange={(event) => setResultFilename(event.target.value)} placeholder="Automatic when blank" /></label>
         <div className="folder vault-folder"><span>{resultDirectory || "No text result folder selected"}</span><button disabled={running} onClick={() => void chooseResultDirectory()}>Choose</button></div>
       </div>}
-      {outputKind === "text" && <><label>Execution mode<select value={executionMode} disabled={running} onChange={(event) => { const value = event.target.value as "independent" | "agent"; setExecutionMode(value); if (value === "agent") { setOutputKind("text"); setConversationMode("continue") } }}><option value="independent">Independent</option><option value="agent">Agent</option></select></label>
-      <label>Context<select value={conversationMode} disabled={running} onChange={(event) => { setConversationMode(event.target.value as ConversationMode); setThreadId("") }}><option value="independent">Independent</option><option value="continue">Conversation</option><option value="chain">Chain bulk prompts</option></select></label>
+      {outputKind === "text" && <><label>Context<select value={conversationMode} disabled={running} onChange={(event) => { const nextMode = event.target.value as ConversationMode; setConversationMode(nextMode); setExecutionMode(executionModeForContextMode(nextMode)); setThreadId(""); setResponse(null); setRunError("") }}><option value="independent">Independent</option><option value="continue">Conversation</option><option value="chain">Bulk Prompt</option></select></label>
       {conversationMode !== "independent" && <div className="conversation-manager">
         <label>Conversation <span className="optional">Blank starts new</span><select value={threadId} disabled={running} onChange={(event) => { setThreadId(event.target.value); setResponse(null); setRunError("") }}><option value="">New conversation</option>{conversations.map((item) => <option value={item.id} key={item.id}>{item.title} · {item.turnCount} turn{item.turnCount === 1 ? "" : "s"}</option>)}</select></label>
         <div className="conversation-actions"><button className="secondary" disabled={running || !threadId} onClick={newConversation}>New</button><button className="danger-button" disabled={running || !threadId} onClick={() => void deleteConversation()}>Delete</button></div>
       </div>}
-      <p className="field-help">{executionMode === "agent"
-        ? <>Agent uses tools and saves each completed turn to the selected conversation.</>
-        : <>Independent uses the full primary agent in an unsaved branch. A selected conversation is loaded as context without changing its saved history.</>}</p></>}
+      <p className="field-help">{conversationMode === "continue"
+        ? <>Conversation uses the full primary-agent loop and tools, loading the selected history and saving each completed turn for continuation.</>
+        : conversationMode === "chain"
+          ? <>Bulk Prompt runs each <code>---</code> section separately. If a saved conversation is selected, every section reads the same existing history without adding batch results to it or chaining outputs.</>
+          : <>Independent uses the full primary-agent loop and tools without loading or persisting a conversation.</>}</p></>}
       {outputKind === "image" && <p className="field-help">Direct Image runs each prompt independently and does not use conversation history, system instructions, reasoning, or Chat assets.</p> }
       <div className="section-heading vault-section"><span>03</span><div><h2>Telegram remote client</h2><p>Local runtime · private chats only</p></div></div>
       <div className="telegram-settings">
@@ -483,10 +497,10 @@ export function ApiVaultView() {
     </aside>
 
     <section className="vault-workspace">
-      <div className="workspace-head"><div><p className="eyebrow">API Vault</p><h2>Prompt workspace</h2><p className="workspace-subtitle">Use <code>---</code> to run multiple prompts. Bulk prompts run independently unless chaining is explicitly selected.</p></div></div>
+      <div className="workspace-head"><div><p className="eyebrow">API Vault</p><h2>Prompt workspace</h2><p className="workspace-subtitle">Use <code>---</code> to run multiple prompts. Bulk Prompt sections run separately; when a saved conversation is selected, each section reads that same history without writing results back.</p></div></div>
       <article className="vault-card">
-        {outputKind === "text" && <><div className="vault-field-head"><div><strong>System instruction</strong><span>Optional and separate from assets</span></div><button className="text-button" disabled={running} onClick={() => void loadText("system")}>Load TXT / MD</button></div>
-        <textarea className="system-input" value={systemInstruction} disabled={running} onChange={(event) => setSystemInstruction(event.target.value)} placeholder="Define behavior, constraints, or output rules…" />
+        {outputKind === "text" && <><div className="vault-field-head"><div><strong>Task instructions <span className="optional">(optional)</span></strong><span>Additional guidance for this run; built-in harness policies remain active.</span></div><button className="text-button" disabled={running} onClick={() => void loadText("system")}>Load TXT / MD</button></div>
+        <textarea className="system-input" value={systemInstruction} disabled={running} onChange={(event) => setSystemInstruction(event.target.value)} placeholder="Add task-specific requirements or output rules…" />
         </>}
         <div className="vault-field-head"><div><strong>User prompt</strong><span>{prompts.length} prompt{prompts.length === 1 ? "" : "s"}</span></div><button className="text-button" disabled={running} onClick={() => void loadText("prompt")}>Load TXT / MD</button></div>
         <textarea className="vault-prompt" value={prompt} disabled={running} onChange={(event) => setPrompt(event.target.value)} placeholder={"Enter a prompt…\n\n---\n\nAdd another prompt."} />
@@ -507,7 +521,8 @@ export function ApiVaultView() {
               <button className={resultView === "rendered" ? "active" : ""} onClick={() => setResultView("rendered")}>Rendered</button>
               <button className={resultView === "raw" ? "active" : ""} onClick={() => setResultView("raw")}>Raw</button>
             </div>
-            <button className="secondary" onClick={() => void navigator.clipboard.writeText(response.text)}>Copy</button>
+            <button className="secondary" onClick={() => void copyResultText(response.text, "Response")}>Copy Response</button>
+            <button className="secondary" disabled={!extractFencedCode(response.text).trim()} onClick={() => void copyResultText(extractFencedCode(response.text), "Code")}>Copy Code</button>
             {outputKind === "text" && <button className="secondary" onClick={() => void saveExistingResponse(response)}>Save result</button>}
           </div>
         </div>
@@ -520,11 +535,11 @@ export function ApiVaultView() {
     </section>
 
     <aside className="vault-run">
-      <div><p className="eyebrow">Execution</p><h2>{outputKind === "image" ? "Direct Image ready" : executionMode === "agent" ? "Agent ready" : "Independent ready"}</h2><p>{prompts.length} prompt{prompts.length === 1 ? "" : "s"} · {assets.length} asset{assets.length === 1 ? "" : "s"}</p></div>
-      <div className="summary-grid"><div><span>Provider</span><strong>{provider}</strong></div>{outputKind === "text" && <><div><span>Reasoning</span><strong>{reasoning}</strong></div><div><span>Mode</span><strong>{executionMode}</strong></div><div><span>Context</span><strong>{conversationMode}</strong></div></>}</div>
+      <div><p className="eyebrow">Execution</p><h2>{outputKind === "image" ? "Direct Image ready" : conversationMode === "continue" ? "Conversation ready" : conversationMode === "chain" ? "Bulk Prompt ready" : "Independent ready"}</h2><p>{prompts.length} prompt{prompts.length === 1 ? "" : "s"} · {assets.length} asset{assets.length === 1 ? "" : "s"}</p></div>
+      <div className="summary-grid"><div><span>Provider</span><strong>{provider}</strong></div>{outputKind === "text" && <><div><span>Reasoning</span><strong>{reasoning}</strong></div><div><span>Context</span><strong>{conversationMode === "chain" ? "Bulk Prompt" : conversationMode === "continue" ? "Conversation" : "Independent"}</strong></div></>}</div>
       <div className="message" role="status">{status}</div>
       {running && <button className="danger-button" type="button" onClick={() => void stopCurrentRun()}>Stop current run</button>}
-      <button className="run-button" disabled={running || !settingsLoaded || !endpoint.trim() || !selectedModel.trim() || !prompts.length || (outputKind === "image" && !outputDirectory)} onClick={() => void run()}><span>{running ? "Running…" : outputKind === "image" ? "Generate image" : executionMode === "agent" ? "Run agent" : "Run independent"}</span><b>→</b></button>
+      <button className="run-button" disabled={running || !settingsLoaded || !endpoint.trim() || !selectedModel.trim() || !prompts.length || (outputKind === "image" && !outputDirectory)} onClick={() => void run()}><span>{running ? "Running…" : outputKind === "image" ? "Generate image" : conversationMode === "continue" ? "Run conversation" : conversationMode === "chain" ? "Run Bulk Prompt" : "Run independent"}</span><b>→</b></button>
     </aside>
   </main>
 }
