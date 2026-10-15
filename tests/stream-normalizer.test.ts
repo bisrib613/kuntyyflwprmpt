@@ -29,6 +29,7 @@ describe("model-targeted visible-text normalization", () => {
     const text = "Literal <tag>value</tag>; fenced sample: ```html\n<script>example()</script>\n```."
     expect(normalizeCompleteVisibleText(text, "gpt-5")).toBe(text)
     expect(normalizeCompleteVisibleText("XML <tag>okay</tag>", "qwen3")).toBe("XML <tag>okay</tag>")
+    expect(normalizeCompleteVisibleText("Literal token </think> is part of the example.", "qwen3")).toBe("Literal token </think> is part of the example.")
   })
 
   it("preserves an unmatched literal less-than fragment at end-of-stream", () => {
