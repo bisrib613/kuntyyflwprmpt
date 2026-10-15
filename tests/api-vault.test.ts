@@ -225,7 +225,7 @@ describe("API Vault agent loop", () => {
     const first = await runApiVault(install, base)
     const second = await runApiVault(install, { ...base, threadId: first.threadId, prompt: "Second prompt" })
     expect(second.text).toBe("Second answer")
-    expect(requestBodies[1].messages?.map((message) => message.role)).toEqual(["system", "system", "user", "assistant", "user"])
+    expect(requestBodies[1].messages?.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"])
     const conversations = await listApiVaultConversations(install)
     expect(conversations).toMatchObject([{ id: first.threadId, title: "First prompt", turnCount: 2 }])
     await deleteApiVaultConversation(install, first.threadId!)
