@@ -14,6 +14,6 @@ export function executionModeForContextMode(contextMode: ConversationMode): "ind
   return contextMode === "continue" ? "agent" : "independent"
 }
 
-export function requestConversationMode(contextMode: ConversationMode): "independent" | "continue" {
-  return contextMode === "independent" ? "independent" : "continue"
+export function requestConversationMode(contextMode: ConversationMode): ConversationMode {
+  return contextMode
 }
