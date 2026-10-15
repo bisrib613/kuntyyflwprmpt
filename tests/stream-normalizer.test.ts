@@ -35,8 +35,8 @@ describe("model-targeted visible-text normalization", () => {
 
   it("heals a thinking fence whose backticks and newline are split across chunks", () => {
     const normalizer = new VisibleTextNormalizer("qwen-thinking")
-    const output = ["Visible\\n", "`", "``thinking\\nprivate", "\\n", "```", "\\nAfter"].map((chunk) => normalizer.feed(chunk)).join("") + normalizer.flush()
-    expect(output).toBe("Visible\\n\\nAfter")
+    const output = ["Visible\n", "`", "``thinking\nprivate", "\n", "```", "\nAfter"].map((chunk) => normalizer.feed(chunk)).join("") + normalizer.flush()
+    expect(output).toBe("Visible\n\nAfter")
   })
 
   it("drops an incomplete hidden reasoning block instead of leaking its tail", () => {
