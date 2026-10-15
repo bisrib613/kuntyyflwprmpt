@@ -228,6 +228,40 @@ describe("API Vault agent loop", () => {
     expect(deltas.join("")).not.toContain("private reasoning")
   })
 
+  it("normalizes split reasoning markers across the OpenAI-compatible SSE transport", async () => {
+    const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-normalize-sse-"))
+    const deltas: string[] = []
+    const frames = [
+      { id: "sse-clean", model: "Qwen3-Next", choices: [{ delta: { content: "Visible<thi" } }] },
+      { choices: [{ delta: { content: "nk>private</thi" } }] },
+      { choices: [{ delta: { content: "nk> answer" } }] },
+    ].map((frame) => `data: ${JSON.stringify(frame)}\\n\\n`).join("") + "data: [DONE]\\n\\n"
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < frames.length; index += 13) {
+          controller.enqueue(encoder.encode(frames.slice(index, index + 13)))
+        }
+        controller.close()
+      },
+    })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })))
+    const request: ApiVaultRequest = {
+      provider: "custom", endpoint: "http://localhost:9999/v1", apiKey: "local", model: "Qwen3-Next",
+      reasoning: "default", outputKind: "text", executionMode: "independent", conversationMode: "independent",
+      systemInstruction: "", prompt: "Give a concise answer.", assets: [],
+    }
+    const result = await runApiVault(install, request, (event) => {
+      if (typeof event.textDelta === "string") deltas.push(event.textDelta)
+    })
+    expect(result.text).toBe("Visible answer")
+    expect(deltas.join("")).toBe("Visible answer")
+    expect(deltas.join("")).not.toContain("private")
+  })
+
   it("continues, lists, and deletes a locally saved conversation", async () => {
     const install = await mkdtemp(path.join(os.tmpdir(), "kuntyy-vault-thread-"))
     const requestBodies: Array<{ messages?: Array<{ role?: string; content?: unknown }> }> = []
